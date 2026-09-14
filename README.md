@@ -83,10 +83,14 @@ The portal has a **"Factory reset"** checkbox (in the Configure WiFi page,
 alongside the MQTT/device fields). Checking it and saving wipes this
 device's saved settings *and* the ESP32 radio's own persisted WiFi
 credentials, then restarts into a fully unconfigured state — equivalent to
-a fresh, never-set-up unit. This is different from the portal's built-in
-**"Erase"** menu button (hidden in this build to avoid the two being
-confused): that one only clears the radio's WiFi credentials and leaves
-this project's own settings untouched, which looks like a reset but isn't
+a fresh, never-set-up unit. Unlike the rest of that page, the reset fires
+regardless of whether the WiFi fields on the same page are filled in or
+manage to (re-)connect — you don't need to retype the WiFi password (the
+page never pre-fills it) just to check the box and hit Save. This is
+different from the portal's built-in **"Erase"** menu button (hidden in
+this build to avoid the two being confused): that one only clears the
+radio's WiFi credentials and leaves this project's own settings untouched,
+which looks like a reset but isn't
 one.
 
 ## Hardware
@@ -171,3 +175,4 @@ here.
 | v4.1.1 | 2026-09-14 | Fixed a build error from v4.1.0 (`'ButtonHoldMode' was not declared in this scope`): the Arduino IDE auto-generates prototypes for functions that don't already have one and inserts them near the top of the file, before custom types defined further down are visible. Moved the `ButtonHoldMode` enum itself up next to the `Settings` struct, right after the includes, so it's already declared by the time those prototypes are generated. No behavior change. |
 | v4.1.2 | 2026-09-14 | Removed the automatic 5-minute `ArduinoOTA` window that ran after every successful setup-portal save -- redundant now that a 2-10s button hold opens a dedicated OTA-only window on its own, and it made every provisioning visit wait out an unused window before restarting. The portal now saves and restarts straight into normal operation. |
 | v4.2.0 | 2026-09-14 | Two setup-portal changes: (1) saving with an empty MQTT host no longer marks the device "configured" -- it keeps WiFi/other fields and goes straight back to the portal next boot instead of silently becoming a unit that connects but can never publish. (2) Added a "Factory reset" checkbox to the portal that wipes both this project's saved settings and the ESP32 radio's own WiFi credentials, and hid the portal's built-in "Erase" menu button (which only clears the radio's WiFi credentials, not our settings, and read as a half-working reset). |
+| v4.2.1 | 2026-09-14 | Fixed the v4.2.0 factory reset checkbox doing nothing on real hardware: it only ran after a successful WiFi (re)connect, but the portal never pre-fills the WiFi password field, so a save without retyping it fails to connect and silently skipped the reset too. Now fires as soon as the box is checked and Save is hit, independent of whether WiFi reconnects, and always restarts afterward. Also fixed a related bug where the checkbox's unsubmitted default value equaled its "checked" value, which could in principle have triggered a false-positive wipe on a portal timeout. |

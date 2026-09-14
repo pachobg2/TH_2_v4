@@ -593,15 +593,19 @@ void runMaintenanceMode(bool viaButton) {
   WiFiManagerParameter p_device_id("device_id", "Device ID (MQTT topics, no spaces)", settings.deviceId.c_str(), 32);
   // Checkbox via WiFiManager's custom-attribute trick (it has no native
   // checkbox type): submitted as "1" when checked, absent entirely
-  // (getValue() == "") when not. A real factory reset -- wipes this
-  // project's own saved settings AND the ESP32 radio's own persisted WiFi
-  // credentials -- unlike the portal's built-in "Erase" menu button, which
-  // only clears the radio's WiFi credentials and leaves our settings
-  // (including whatever's in the fields above) untouched. That default
-  // button is hidden below (see setMenu()) to avoid the two being confused
-  // for each other.
+  // (getValue() == "") when not. The parameter's own default value is left
+  // "" (not "1") deliberately -- "1" is only injected into the rendered
+  // HTML's value= attribute via the custom-attribute string below, so it's
+  // only what gets POSTed if the box is actually checked, not what
+  // getValue() returns before any submission. A real factory reset --
+  // wipes this project's own saved settings AND the ESP32 radio's own
+  // persisted WiFi credentials -- unlike the portal's built-in "Erase"
+  // menu button, which only clears the radio's WiFi credentials and
+  // leaves our settings (including whatever's in the fields above)
+  // untouched. That default button is hidden below (see setMenu()) to
+  // avoid the two being confused for each other.
   WiFiManagerParameter p_factory_reset("factory_reset",
-    "Factory reset (erase ALL saved settings, including WiFi)", "1", 2, "type=\"checkbox\"");
+    "Factory reset (erase ALL saved settings, including WiFi)", "", 2, "type=\"checkbox\" value=\"1\"");
 
   WiFiManager wm;
   wm.addParameter(&p_mqtt_host);
@@ -663,16 +667,16 @@ void runMaintenanceMode(bool viaButton) {
   }
   bool connected = (WiFi.status() == WL_CONNECTED);
 
-  if (!connected) {
-    Serial.println("Setup portal timed out / no connection -- resuming normal cycle with existing settings.");
-    ledcWrite(LED_PIN, 0);
-    blink(3, 20, 200);
-    stopAwakeWatchdog();
-    return;
-  }
-
-  // Checked regardless of what else was filled in -- a factory reset
-  // request takes priority over a normal save.
+  // Checked before the connected/not-connected branch below, and
+  // regardless of its outcome -- a factory reset doesn't need a live WiFi
+  // connection to execute (it only touches flash), and gating it behind a
+  // successful connect meant checking the box and hitting Save silently
+  // did nothing whenever the WiFi fields weren't (re-)filled in too, e.g.
+  // WiFiManager never pre-fills the WiFi password field on this page, so a
+  // save with it left blank fails to connect on its own, independent of
+  // the checkbox. The parameter's own default is "" (not "1"), so this
+  // only fires on an actual submission with the box checked -- a plain
+  // portal timeout leaves it unset.
   if (strcmp(p_factory_reset.getValue(), "1") == 0) {
     Serial.println("Factory reset requested from setup portal -- wiping saved settings and WiFi credentials.");
     settingsPrefs.begin("settings", false);
@@ -686,6 +690,14 @@ void runMaintenanceMode(bool viaButton) {
     Serial.flush();
     delay(200);
     ESP.restart();
+  }
+
+  if (!connected) {
+    Serial.println("Setup portal timed out / no connection -- resuming normal cycle with existing settings.");
+    ledcWrite(LED_PIN, 0);
+    blink(3, 20, 200);
+    stopAwakeWatchdog();
+    return;
   }
 
   settings.mqttHost     = p_mqtt_host.getValue();
