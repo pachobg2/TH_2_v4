@@ -57,27 +57,24 @@ for the OTA-only path to use.
    and model (e.g. "P@cho TH-2 Sensor") and the firmware version below it,
    so you can tell which unit and which build you're looking at without
    checking Serial or Home Assistant.
-3. Pick your WiFi network from the scanned list (or enter one manually),
-   plus fill in your MQTT broker host/port/username/password and a device
-   name. Device ID defaults to an auto-generated `th4_XXXXXX` (stable,
-   collision-free out of the box) — override it here if you want a
-   memorable topic name instead. **MQTT broker host is required** — saving
-   with it blank connects to WiFi but leaves the device unconfigured (see
-   below), rather than restarting into a state where it can never publish.
-4. Save. The device connects, stores everything to flash, and restarts
-   straight into normal operation. To also push new firmware in the same
-   visit, hold the button 2-10s on the next boot (see below) instead of
-   waiting through a separate OTA window here.
+3. Pick your WiFi network from the scanned list (or enter one manually).
+   **Keep scrolling** — a "MQTT & device settings" heading marks where the
+   rest of the same form continues below the WiFi fields: broker
+   host/port/username/password and a device name. Device ID defaults to an
+   auto-generated `th4_XXXXXX` (stable, collision-free out of the box) —
+   override it here if you want a memorable topic name instead. **MQTT
+   broker host is a required field** — the browser won't let you submit
+   the form with it blank, so there's no way to save the WiFi half only by
+   mistake.
+4. Save (once, for the whole form). The device connects, stores
+   everything to flash, and restarts straight into normal operation. To
+   also push new firmware in the same visit, hold the button 2-10s on the
+   next boot (see below) instead of waiting through a separate OTA window
+   here.
 
 To reconfigure a unit later (new WiFi network, different broker), hold the
 setup button past 10s while powering it on — same portal, pre-filled with
 its current settings.
-
-If the MQTT host field is left blank when you save, the device still
-connects to WiFi (and keeps whatever else you entered) but does **not**
-mark itself configured — the next boot goes straight back to the portal
-on its own, no button hold needed, instead of restarting into a unit that
-connects but can never publish anything.
 
 ### Factory reset
 
@@ -188,6 +185,14 @@ here.
 
 ## Version History
 
+**2026-09-14: `FIRMWARE_VERSION` manually reset to `4.0.0`.** Everything
+from here through v4.4.0 below is being treated as the beta/development
+cycle for this project; new entries continue below the marker row, which
+means some version numbers get reused for different content than their
+beta-cycle entry further down this same table (e.g. there are two
+"v4.0.1" rows). Table *position* is authoritative for ordering, not the
+version string, if that ever matters.
+
 | Version | Date | Changes |
 |---|---|---|
 | v4.0.0 | 2026-09-14 | Initial fork of `temp_humidity_sensor`: WiFi/MQTT/device-identity moved from compiled `config.h` to a runtime WiFiManager-based setup portal (AP broadcast, network scan, custom MQTT/device-name fields), auto-generated stable device ID, combined setup+OTA button flow. All sensor/battery/LED/diagnostic behavior otherwise unchanged from `temp_humidity_sensor`. |
@@ -203,3 +208,5 @@ here.
 | v4.2.4 | 2026-09-14 | Fixed the v4.2.1 factory reset fix still not firing on real hardware: the checkbox value was only checked *after* the portal wait loop exited, but that loop doesn't exit promptly on a failed WiFi connect (e.g. an intentionally-blank password) -- WiFiManager just keeps the portal open and retries, so it could sit there for the full 10-minute portal timeout before the checkbox was ever looked at. Now polled every loop iteration, exiting immediately once the box is checked and Save is hit, regardless of WiFi outcome. |
 | v4.3.0 | 2026-09-14 | Replaced the factory reset checkbox with a button hold: still not firing on real hardware after two rounds of fixes, and the actual root cause turned out to be WiFiManager's custom-attribute mechanism itself -- adding `value="1"` via a checkbox's custom-attribute string collides with the framework's own `value=''` attribute on the same generated `<input>` tag, so the checked state never made it into the submitted form correctly in the first place. Replaced entirely: holding the setup button again for `FACTORY_RESET_HOLD_MS` (5s) while the portal is open now triggers the reset directly, no web form involved. |
 | v4.4.0 | 2026-09-14 | Added a "LED Brightness" number entity in Home Assistant (0-100%, persisted in NVS, applied on the device's next wake) -- `config.h`'s `LED_BRIGHTNESS_PCT` is now only the initial default for a never-configured unit rather than a fixed value. Also added a device brand/model line ("P@cho TH-2 Sensor") above the firmware version at the top of every setup-portal page. Confirmed the "Last Full Charge" diagnostic (shared with the rest of the battery-powered fleet) has been present since v4.0.0. |
+| — | 2026-09-14 | **Beta cycle above declared over; `FIRMWARE_VERSION` reset to `4.0.0` as the stable baseline. Entries below continue from that reset — see the note above the table.** |
+| v4.0.1 | 2026-09-14 | Fixed the setup portal reading as two separate steps: MQTT/device fields are on the same "Configure WiFi" form as the WiFi picker (submitted together, one Save), but with no visual break between the two it was easy to hit Save right after picking a network without reaching the MQTT fields below, ending up with a device that connects to WiFi but never marks itself configured. Added a heading separating the two sections, and made the MQTT host field HTML `required` so the browser won't submit the form with it blank at all. |

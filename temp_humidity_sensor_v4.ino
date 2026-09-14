@@ -616,7 +616,11 @@ void connectWiFi() {
 // existing WiFi credentials first -- see the comment above the
 // startConfigPortal() call for why), scans for nearby networks, and serves
 // a page (WiFiManager) with a WiFi picker plus custom fields for MQTT and
-// device identity. Holding the setup button again for FACTORY_RESET_HOLD_MS
+// device identity -- one form, one Save, both saved together in the same
+// submission (a heading marks where the MQTT/device section starts, and
+// the MQTT host field is HTML-required, so the browser won't let it
+// submit with that half left blank). Holding the setup button again for
+// FACTORY_RESET_HOLD_MS
 // while this page is open wipes the device back to a fully unconfigured
 // state instead (see the wait loop below). If the portal succeeds,
 // settings are saved and the device restarts straight into normal
@@ -633,7 +637,19 @@ void runMaintenanceMode(bool viaButton) {
   char mqttPortStr[6];
   snprintf(mqttPortStr, sizeof(mqttPortStr), "%u", settings.mqttPort);
 
-  WiFiManagerParameter p_mqtt_host("mqtt_host", "MQTT broker host or IP", settings.mqttHost.c_str(), 64);
+  // Raw-HTML parameter (no id/value, just markup) to visually separate the
+  // MQTT/device fields below from the WiFi network picker above them on
+  // the same "Configure WiFi" page -- both sections are one form, saved
+  // together in a single submission, but with nothing marking where WiFi
+  // ends and MQTT begins it's easy to hit Save right after picking a
+  // network without ever noticing the rest of the page, especially on a
+  // phone. That produces a device that connects to WiFi but never marks
+  // itself configured (see the empty-mqttHost check below) -- confusing,
+  // since from the portal side it just looks like a normal save.
+  WiFiManagerParameter p_mqtt_heading(
+    "<hr><p style='margin-bottom:0;'><strong>MQTT &amp; device settings</strong><br>"
+    "(same form as the WiFi network above -- fill in both, then Save once)</p>");
+  WiFiManagerParameter p_mqtt_host("mqtt_host", "MQTT broker host or IP", settings.mqttHost.c_str(), 64, "required");
   WiFiManagerParameter p_mqtt_port("mqtt_port", "MQTT broker port", mqttPortStr, 6);
   WiFiManagerParameter p_mqtt_user("mqtt_user", "MQTT username", settings.mqttUser.c_str(), 32);
   WiFiManagerParameter p_mqtt_pass("mqtt_pass", "MQTT password", settings.mqttPassword.c_str(), 32, "type='password'");
@@ -657,6 +673,7 @@ void runMaintenanceMode(bool viaButton) {
                           + " Sensor\\A Firmware v" + String(FIRMWARE_VERSION)
                           + "';white-space:pre-line;display:block;text-align:center;color:#888;margin:4px 0;}</style>";
   wm.setCustomHeadElement(versionHeader.c_str());
+  wm.addParameter(&p_mqtt_heading);
   wm.addParameter(&p_mqtt_host);
   wm.addParameter(&p_mqtt_port);
   wm.addParameter(&p_mqtt_user);
@@ -773,12 +790,15 @@ void runMaintenanceMode(bool viaButton) {
   settings.wifiSsid     = WiFi.SSID();
   settings.wifiPassword = WiFi.psk();
 
-  // WiFi connected fine, but an empty MQTT host means this device could
-  // never actually publish anything -- don't mark it "configured" on a
-  // submission like that, or it silently gets stuck: nothing works, and
-  // nothing prompts you back into the portal short of holding the button
-  // for another 10s. Leaving `configured` false means the next boot goes
-  // straight back to setup on its own, no button needed.
+  // Backstop, not the primary defense -- the mqtt_host field is marked
+  // HTML `required` now, so a normal browser won't submit the form with
+  // it blank in the first place. This only matters if that's somehow
+  // bypassed (JS-disabled edge cases, older browsers). An empty MQTT host
+  // means this device could never actually publish anything, so don't
+  // mark it "configured" on a submission like that -- it'd silently get
+  // stuck: nothing works, and nothing prompts you back into the portal
+  // short of holding the button again. Leaving `configured` false means
+  // the next boot goes straight back to setup on its own, no button needed.
   if (settings.mqttHost.length() == 0) {
     saveSettings(); // still keep the WiFi/device fields that were filled in
     Serial.println("Setup portal closed with an empty MQTT broker host -- not marking as configured.");
