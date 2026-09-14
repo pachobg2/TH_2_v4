@@ -608,6 +608,14 @@ void runMaintenanceMode(bool viaButton) {
     "Factory reset (erase ALL saved settings, including WiFi)", "", 2, "type=\"checkbox\" value=\"1\"");
 
   WiFiManager wm;
+  // Shown at the top of every portal page, including the first one you
+  // land on -- so you can tell which build a unit is running without
+  // digging through Serial or Home Assistant. versionHeader has to stay
+  // alive for as long as wm does (WiFiManager stores the pointer, not a
+  // copy), so it's a local here rather than a temporary.
+  String versionHeader = "<p style='text-align:center;color:#888;margin:4px 0;'>"
+                          + String(DEVICE_MODEL) + " &middot; firmware v" + String(FIRMWARE_VERSION) + "</p>";
+  wm.setCustomBodyHeader(versionHeader.c_str());
   wm.addParameter(&p_mqtt_host);
   wm.addParameter(&p_mqtt_port);
   wm.addParameter(&p_mqtt_user);

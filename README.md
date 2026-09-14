@@ -8,17 +8,14 @@ firmware image you can flash onto any unit and configure from a phone,
 closer to how a commercial IoT device behaves, rather than editing and
 rebuilding per device like the rest of this fleet.
 
-**Not yet flashed to real hardware for this change.** The setup portal
-now runs `WiFiManager` in non-blocking mode (`setConfigPortalBlocking(false)`
-+ a loop calling `process()`/`getConfigPortalActive()`) so the LED can
-blink while the portal is open, instead of the simpler blocking
-`startConfigPortal()` call used before — this is a less commonly exercised
-part of the library's API than the blocking path. Treat the first bring-up
-like any new sketch here: watch the Serial Monitor across a full boot, and
-double-check `WiFiManagerParameter`/`startConfigPortal`/
-`setConfigPortalBlocking`/`process`/`getConfigPortalActive` against
-whatever WiFiManager version Library Manager actually installs, since its
-API has shifted across versions.
+Flashed and tested on real hardware since v4.0.0; each Version History
+entry below reflects what's actually been verified working (or fixed
+after not working) on a physical unit. `WiFiManager`'s API has shifted
+across versions historically, so if you hit a build error on a method
+call here (`WiFiManagerParameter`, `startConfigPortal`,
+`setConfigPortalBlocking`/`process`/`getConfigPortalActive`,
+`setCustomBodyHeader`, `setMenu`), double-check it against whatever
+version Library Manager actually installs for you.
 
 ## Files
 
@@ -54,7 +51,10 @@ for the OTA-only path to use.
    `AP_PASSWORD` from `config.h` (default `setup1234`), LED blinking once
    a second for as long as the portal is open.
 2. Connect to that network from your phone or laptop. A captive-portal
-   page should open automatically (or browse to `192.168.4.1`).
+   page should open automatically (or browse to `192.168.4.1`). The device
+   model and firmware version are shown at the top of every portal page,
+   including this first one, so you can tell which build a unit is running
+   without checking Serial or Home Assistant.
 3. Pick your WiFi network from the scanned list (or enter one manually),
    plus fill in your MQTT broker host/port/username/password and a device
    name. Device ID defaults to an auto-generated `th4_XXXXXX` (stable,
@@ -176,3 +176,4 @@ here.
 | v4.1.2 | 2026-09-14 | Removed the automatic 5-minute `ArduinoOTA` window that ran after every successful setup-portal save -- redundant now that a 2-10s button hold opens a dedicated OTA-only window on its own, and it made every provisioning visit wait out an unused window before restarting. The portal now saves and restarts straight into normal operation. |
 | v4.2.0 | 2026-09-14 | Two setup-portal changes: (1) saving with an empty MQTT host no longer marks the device "configured" -- it keeps WiFi/other fields and goes straight back to the portal next boot instead of silently becoming a unit that connects but can never publish. (2) Added a "Factory reset" checkbox to the portal that wipes both this project's saved settings and the ESP32 radio's own WiFi credentials, and hid the portal's built-in "Erase" menu button (which only clears the radio's WiFi credentials, not our settings, and read as a half-working reset). |
 | v4.2.1 | 2026-09-14 | Fixed the v4.2.0 factory reset checkbox doing nothing on real hardware: it only ran after a successful WiFi (re)connect, but the portal never pre-fills the WiFi password field, so a save without retyping it fails to connect and silently skipped the reset too. Now fires as soon as the box is checked and Save is hit, independent of whether WiFi reconnects, and always restarts afterward. Also fixed a related bug where the checkbox's unsubmitted default value equaled its "checked" value, which could in principle have triggered a false-positive wipe on a portal timeout. |
+| v4.2.2 | 2026-09-14 | Added the device model and firmware version to the top of every setup-portal page (`wm.setCustomBodyHeader()`), including the first page you land on -- no more guessing which build a unit is running without checking Serial or Home Assistant. |
