@@ -610,12 +610,17 @@ void runMaintenanceMode(bool viaButton) {
   WiFiManager wm;
   // Shown at the top of every portal page, including the first one you
   // land on -- so you can tell which build a unit is running without
-  // digging through Serial or Home Assistant. versionHeader has to stay
-  // alive for as long as wm does (WiFiManager stores the pointer, not a
-  // copy), so it's a local here rather than a temporary.
-  String versionHeader = "<p style='text-align:center;color:#888;margin:4px 0;'>"
-                          + String(DEVICE_MODEL) + " &middot; firmware v" + String(FIRMWARE_VERSION) + "</p>";
-  wm.setCustomBodyHeader(versionHeader.c_str());
+  // digging through Serial or Home Assistant. setCustomBodyHeader() would
+  // be the direct way to do this, but it's not available in every
+  // WiFiManager release (missing on at least one version this fleet has
+  // built against), so this uses setCustomHeadElement() instead -- a much
+  // older, more consistently-available API -- with a CSS ::before to
+  // render text without needing a body-injection hook. versionHeader has
+  // to stay alive for as long as wm does (WiFiManager stores the pointer,
+  // not a copy), so it's a local here rather than a temporary.
+  String versionHeader = "<style>body::before{content:'" + String(DEVICE_MODEL) + " - firmware v"
+                          + String(FIRMWARE_VERSION) + "';display:block;text-align:center;color:#888;margin:4px 0;}</style>";
+  wm.setCustomHeadElement(versionHeader.c_str());
   wm.addParameter(&p_mqtt_host);
   wm.addParameter(&p_mqtt_port);
   wm.addParameter(&p_mqtt_user);

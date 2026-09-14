@@ -11,11 +11,12 @@ rebuilding per device like the rest of this fleet.
 Flashed and tested on real hardware since v4.0.0; each Version History
 entry below reflects what's actually been verified working (or fixed
 after not working) on a physical unit. `WiFiManager`'s API has shifted
-across versions historically, so if you hit a build error on a method
-call here (`WiFiManagerParameter`, `startConfigPortal`,
-`setConfigPortalBlocking`/`process`/`getConfigPortalActive`,
-`setCustomBodyHeader`, `setMenu`), double-check it against whatever
-version Library Manager actually installs for you.
+across versions historically -- `setCustomBodyHeader()` already turned out
+to be missing on at least one installed version (see v4.2.3) -- so if you
+hit a build error on a method call here (`WiFiManagerParameter`,
+`startConfigPortal`, `setConfigPortalBlocking`/`process`/
+`getConfigPortalActive`, `setCustomHeadElement`, `setMenu`), double-check
+it against whatever version Library Manager actually installs for you.
 
 ## Files
 
@@ -177,3 +178,4 @@ here.
 | v4.2.0 | 2026-09-14 | Two setup-portal changes: (1) saving with an empty MQTT host no longer marks the device "configured" -- it keeps WiFi/other fields and goes straight back to the portal next boot instead of silently becoming a unit that connects but can never publish. (2) Added a "Factory reset" checkbox to the portal that wipes both this project's saved settings and the ESP32 radio's own WiFi credentials, and hid the portal's built-in "Erase" menu button (which only clears the radio's WiFi credentials, not our settings, and read as a half-working reset). |
 | v4.2.1 | 2026-09-14 | Fixed the v4.2.0 factory reset checkbox doing nothing on real hardware: it only ran after a successful WiFi (re)connect, but the portal never pre-fills the WiFi password field, so a save without retyping it fails to connect and silently skipped the reset too. Now fires as soon as the box is checked and Save is hit, independent of whether WiFi reconnects, and always restarts afterward. Also fixed a related bug where the checkbox's unsubmitted default value equaled its "checked" value, which could in principle have triggered a false-positive wipe on a portal timeout. |
 | v4.2.2 | 2026-09-14 | Added the device model and firmware version to the top of every setup-portal page (`wm.setCustomBodyHeader()`), including the first page you land on -- no more guessing which build a unit is running without checking Serial or Home Assistant. |
+| v4.2.3 | 2026-09-14 | Fixed a build error from v4.2.2: `setCustomBodyHeader()` doesn't exist on the installed WiFiManager version (`'class WiFiManager' has no member named 'setCustomBodyHeader'`). Switched to `setCustomHeadElement()` -- a much older, more consistently-available API -- injecting the same version text via a CSS `body::before` instead. Same visible result, no behavior change. |
