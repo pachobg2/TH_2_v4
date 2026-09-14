@@ -80,19 +80,25 @@ connects but can never publish anything.
 
 ### Factory reset
 
-The portal has a **"Factory reset"** checkbox (in the Configure WiFi page,
-alongside the MQTT/device fields). Checking it and saving wipes this
-device's saved settings *and* the ESP32 radio's own persisted WiFi
-credentials, then restarts into a fully unconfigured state — equivalent to
-a fresh, never-set-up unit. Unlike the rest of that page, the reset fires
-regardless of whether the WiFi fields on the same page are filled in or
-manage to (re-)connect — you don't need to retype the WiFi password (the
-page never pre-fills it) just to check the box and hit Save. This is
-different from the portal's built-in **"Erase"** menu button (hidden in
-this build to avoid the two being confused): that one only clears the
-radio's WiFi credentials and leaves this project's own settings untouched,
-which looks like a reset but isn't
-one.
+While the setup portal is open (LED blinking), hold the setup button again
+for `FACTORY_RESET_HOLD_MS` (5s by default) — no browser needed. This
+wipes both this device's saved settings and the ESP32 radio's own
+persisted WiFi credentials, then restarts into a fully unconfigured
+state, equivalent to a fresh, never-set-up unit.
+
+This used to be a checkbox on the Configure WiFi page instead; it's a
+button-hold now because the checkbox never reliably worked (see v4.2.0
+through v4.2.4) — WiFiManager's custom-attribute mechanism for adding a
+checkbox ends up emitting a duplicate HTML `value` attribute on the input,
+so the "checked" value never actually made it into the submitted form
+correctly, and separately, checking it still required the page's WiFi
+fields to resolve one way or another (connect or fail) before the
+checkbox was ever even looked at. The button hold has neither problem.
+
+This is different from the portal's built-in **"Erase"** menu button
+(hidden in this build to avoid the two being confused): that one only
+clears the radio's WiFi credentials and leaves this project's own settings
+untouched, which looks like a reset but isn't one.
 
 ## Hardware
 
@@ -180,3 +186,4 @@ here.
 | v4.2.2 | 2026-09-14 | Added the device model and firmware version to the top of every setup-portal page (`wm.setCustomBodyHeader()`), including the first page you land on -- no more guessing which build a unit is running without checking Serial or Home Assistant. |
 | v4.2.3 | 2026-09-14 | Fixed a build error from v4.2.2: `setCustomBodyHeader()` doesn't exist on the installed WiFiManager version (`'class WiFiManager' has no member named 'setCustomBodyHeader'`). Switched to `setCustomHeadElement()` -- a much older, more consistently-available API -- injecting the same version text via a CSS `body::before` instead. Same visible result, no behavior change. |
 | v4.2.4 | 2026-09-14 | Fixed the v4.2.1 factory reset fix still not firing on real hardware: the checkbox value was only checked *after* the portal wait loop exited, but that loop doesn't exit promptly on a failed WiFi connect (e.g. an intentionally-blank password) -- WiFiManager just keeps the portal open and retries, so it could sit there for the full 10-minute portal timeout before the checkbox was ever looked at. Now polled every loop iteration, exiting immediately once the box is checked and Save is hit, regardless of WiFi outcome. |
+| v4.3.0 | 2026-09-14 | Replaced the factory reset checkbox with a button hold: still not firing on real hardware after two rounds of fixes, and the actual root cause turned out to be WiFiManager's custom-attribute mechanism itself -- adding `value="1"` via a checkbox's custom-attribute string collides with the framework's own `value=''` attribute on the same generated `<input>` tag, so the checked state never made it into the submitted form correctly in the first place. Replaced entirely: holding the setup button again for `FACTORY_RESET_HOLD_MS` (5s) while the portal is open now triggers the reset directly, no web form involved. |

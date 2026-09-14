@@ -51,6 +51,12 @@ static const uint32_t BUTTON_OTA_HOLD_MS   = 2000;  // 2s
 static const uint32_t BUTTON_SETUP_HOLD_MS = 10000; // 10s
 static const uint32_t SETUP_LED_BLINK_MS   = 1000;  // 1s
 
+// While the setup portal is open, holding the button again for this long
+// wipes the device's saved settings and the ESP32 radio's own persisted
+// WiFi credentials, then restarts unconfigured -- a factory reset, done
+// entirely by hold gesture rather than through the web page.
+static const uint32_t FACTORY_RESET_HOLD_MS = 5000; // 5s
+
 // ------------------------------------------------------------------
 // Hardware pins (ESP32-C3 -- same wiring as temp_humidity_sensor)
 // ------------------------------------------------------------------

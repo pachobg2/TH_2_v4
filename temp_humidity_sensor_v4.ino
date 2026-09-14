@@ -31,13 +31,16 @@
  *     at all. Held 2-10s opens a button-triggered OTA-only window (no
  *     portal, LED solid on) -- same idea as the remote MQTT "OTA Request"
  *     switch, just triggered locally. Held past 10s opens the full setup
- *     portal (LED blinking once a second) -- once it succeeds, it opens a
- *     normal ArduinoOTA window too before restarting into normal
- *     operation. An unconfigured device always goes straight to the
- *     portal regardless of hold duration, since the OTA-only path needs
- *     already-saved WiFi credentials that don't exist yet. Remote OTA via
- *     the "OTA Request" MQTT switch is unchanged from temp_humidity_sensor
- *     and doesn't go through any of this at all.
+ *     portal (LED blinking once a second) -- once it succeeds, settings
+ *     are saved and it restarts straight into normal operation (hold
+ *     2-10s on the next boot too if you also want to push firmware). An
+ *     unconfigured device always goes straight to the portal regardless
+ *     of hold duration, since the OTA-only path needs already-saved WiFi
+ *     credentials that don't exist yet. Remote OTA via the "OTA Request"
+ *     MQTT switch is unchanged from temp_humidity_sensor and doesn't go
+ *     through any of this at all. While the portal is open, holding the
+ *     button again for FACTORY_RESET_HOLD_MS wipes the device back to a
+ *     fully unconfigured state -- no browser interaction needed.
  *   - Device ID defaults to an auto-generated, stable "th4_XXXXXX" (from
  *     the chip's own MAC) so units never collide on MQTT topics out of the
  *     box, but you can override it in the portal if you want a memorable
@@ -570,12 +573,14 @@ void connectWiFi() {
 // existing WiFi credentials first -- see the comment above the
 // startConfigPortal() call for why), scans for nearby networks, and serves
 // a page (WiFiManager) with a WiFi picker plus custom fields for MQTT and
-// device identity. If the portal succeeds, settings are saved and the
-// device restarts straight into normal operation -- to also push new
-// firmware in the same visit, hold the button 2-10s on the next boot
-// instead (runButtonOtaMode()). If the portal times out or is cancelled,
-// this returns and the caller goes back to sleep with whatever settings
-// already existed (unchanged).
+// device identity. Holding the setup button again for FACTORY_RESET_HOLD_MS
+// while this page is open wipes the device back to a fully unconfigured
+// state instead (see the wait loop below). If the portal succeeds,
+// settings are saved and the device restarts straight into normal
+// operation -- to also push new firmware in the same visit, hold the
+// button 2-10s on the next boot instead (runButtonOtaMode()). If the
+// portal times out or is cancelled, this returns and the caller goes back
+// to sleep with whatever settings already existed (unchanged).
 void runMaintenanceMode(bool viaButton) {
   Serial.println(viaButton
     ? "Setup button held >10s -- entering maintenance mode."
@@ -591,21 +596,6 @@ void runMaintenanceMode(bool viaButton) {
   WiFiManagerParameter p_mqtt_pass("mqtt_pass", "MQTT password", settings.mqttPassword.c_str(), 32, "type='password'");
   WiFiManagerParameter p_device_name("device_name", "Device name (shown in Home Assistant)", settings.deviceName.c_str(), 40);
   WiFiManagerParameter p_device_id("device_id", "Device ID (MQTT topics, no spaces)", settings.deviceId.c_str(), 32);
-  // Checkbox via WiFiManager's custom-attribute trick (it has no native
-  // checkbox type): submitted as "1" when checked, absent entirely
-  // (getValue() == "") when not. The parameter's own default value is left
-  // "" (not "1") deliberately -- "1" is only injected into the rendered
-  // HTML's value= attribute via the custom-attribute string below, so it's
-  // only what gets POSTed if the box is actually checked, not what
-  // getValue() returns before any submission. A real factory reset --
-  // wipes this project's own saved settings AND the ESP32 radio's own
-  // persisted WiFi credentials -- unlike the portal's built-in "Erase"
-  // menu button, which only clears the radio's WiFi credentials and
-  // leaves our settings (including whatever's in the fields above)
-  // untouched. That default button is hidden below (see setMenu()) to
-  // avoid the two being confused for each other.
-  WiFiManagerParameter p_factory_reset("factory_reset",
-    "Factory reset (erase ALL saved settings, including WiFi)", "", 2, "type=\"checkbox\" value=\"1\"");
 
   WiFiManager wm;
   // Shown at the top of every portal page, including the first one you
@@ -627,11 +617,11 @@ void runMaintenanceMode(bool viaButton) {
   wm.addParameter(&p_mqtt_pass);
   wm.addParameter(&p_device_name);
   wm.addParameter(&p_device_id);
-  wm.addParameter(&p_factory_reset);
   wm.setConfigPortalTimeout(PORTAL_TIMEOUT_SEC);
   // Hide the built-in "Erase" menu button -- it only clears the radio's own
   // WiFi credentials, not our settings, which reads as a half-working
-  // factory reset. Use the checkbox above instead for an actual full reset.
+  // factory reset and could be mistaken for the real one (see the button
+  // hold below).
   std::vector<const char*> menu = {"wifi", "param", "info", "sep", "restart", "exit"};
   wm.setMenu(menu);
 
@@ -668,17 +658,42 @@ void runMaintenanceMode(bool viaButton) {
 
   unsigned long lastBlink = 0;
   bool ledOn = false;
-  // Polled every iteration, not just after the loop exits -- WiFiManager
-  // captures submitted parameter values (including this checkbox)
-  // synchronously as soon as the Save form posts, but a failed WiFi
-  // connect attempt (e.g. the password field left blank -- it's never
-  // pre-filled) doesn't end the portal on its own; WiFiManager just keeps
-  // it open and waits for another attempt, so the loop below could
-  // otherwise sit here for the full portal timeout (PORTAL_TIMEOUT_SEC,
-  // 10 minutes) before ever getting a chance to check the box.
-  while (wm.getConfigPortalActive() && WiFi.status() != WL_CONNECTED
-         && strcmp(p_factory_reset.getValue(), "1") != 0) {
+  // Holding the setup button again for FACTORY_RESET_HOLD_MS while the
+  // portal is open wipes this device's saved settings and the ESP32
+  // radio's own persisted WiFi credentials, then restarts unconfigured --
+  // equivalent to a fresh, never-set-up unit. Deliberately a physical
+  // gesture rather than a web-form control: an earlier checkbox-based
+  // version (see Version History) turned out to never actually submit
+  // correctly, since WiFiManagerParameter's custom-attribute mechanism
+  // ends up emitting a duplicate HTML `value` attribute on the checkbox
+  // input, and it also needed a live WiFi connection attempt to resolve
+  // one way or the other before it was ever even looked at. This has
+  // neither problem -- no browser interaction needed at all, and it fires
+  // the instant the hold crosses the threshold, independent of WiFi.
+  unsigned long resetHoldStart = 0; // 0 == button not currently held
+  while (wm.getConfigPortalActive() && WiFi.status() != WL_CONNECTED) {
     wm.process();
+
+    if (digitalRead(SETUP_PIN) == LOW) {
+      if (resetHoldStart == 0) resetHoldStart = millis();
+      if (millis() - resetHoldStart >= FACTORY_RESET_HOLD_MS) {
+        Serial.println("Setup button held during portal -- factory reset requested.");
+        settingsPrefs.begin("settings", false);
+        settingsPrefs.clear();
+        settingsPrefs.end();
+        WiFi.disconnect(true, true); // also erase the radio's own persisted WiFi credentials
+        blink(5, 50, 100);
+        ledcWrite(LED_PIN, 0);
+        stopAwakeWatchdog();
+        Serial.println("Restarting into unconfigured state...");
+        Serial.flush();
+        delay(200);
+        ESP.restart();
+      }
+    } else {
+      resetHoldStart = 0;
+    }
+
     unsigned long now = millis();
     if (now - lastBlink >= SETUP_LED_BLINK_MS) {
       lastBlink = now;
@@ -688,26 +703,6 @@ void runMaintenanceMode(bool viaButton) {
     delay(10);
   }
   bool connected = (WiFi.status() == WL_CONNECTED);
-
-  // A factory reset doesn't need a live WiFi connection to execute (it
-  // only touches flash) -- checked as soon as the loop above sees it,
-  // regardless of whether WiFi ever connected. The parameter's own
-  // default is "" (not "1"), so this only fires on an actual submission
-  // with the box checked -- a plain portal timeout leaves it unset.
-  if (strcmp(p_factory_reset.getValue(), "1") == 0) {
-    Serial.println("Factory reset requested from setup portal -- wiping saved settings and WiFi credentials.");
-    settingsPrefs.begin("settings", false);
-    settingsPrefs.clear();
-    settingsPrefs.end();
-    WiFi.disconnect(true, true); // also erase the radio's own persisted WiFi credentials
-    blink(5, 50, 100);
-    ledcWrite(LED_PIN, 0);
-    stopAwakeWatchdog();
-    Serial.println("Restarting into unconfigured state...");
-    Serial.flush();
-    delay(200);
-    ESP.restart();
-  }
 
   if (!connected) {
     Serial.println("Setup portal timed out / no connection -- resuming normal cycle with existing settings.");
