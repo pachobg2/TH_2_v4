@@ -569,16 +569,17 @@ void connectWiFi() {
 // existing WiFi credentials first -- see the comment above the
 // startConfigPortal() call for why), scans for nearby networks, and serves
 // a page (WiFiManager) with a WiFi picker plus custom fields for MQTT and
-// device identity. If the portal succeeds, settings are saved, a normal
-// ArduinoOTA window is opened so you can push new firmware in the same
-// session, and the device restarts into normal operation. If it times out
-// or is cancelled, this returns and the caller goes back to sleep with
-// whatever settings already existed (unchanged).
+// device identity. If the portal succeeds, settings are saved and the
+// device restarts straight into normal operation -- to also push new
+// firmware in the same visit, hold the button 2-10s on the next boot
+// instead (runButtonOtaMode()). If the portal times out or is cancelled,
+// this returns and the caller goes back to sleep with whatever settings
+// already existed (unchanged).
 void runMaintenanceMode(bool viaButton) {
   Serial.println(viaButton
     ? "Setup button held >10s -- entering maintenance mode."
     : "No saved WiFi config yet -- entering first-time setup.");
-  startAwakeWatchdog((PORTAL_TIMEOUT_SEC + 60) * 1000UL + OTA_WINDOW_MS);
+  startAwakeWatchdog((PORTAL_TIMEOUT_SEC + 60) * 1000UL);
 
   char mqttPortStr[6];
   snprintf(mqttPortStr, sizeof(mqttPortStr), "%u", settings.mqttPort);
@@ -671,19 +672,10 @@ void runMaintenanceMode(bool viaButton) {
   Serial.printf("Setup saved: device_id=%s mqtt=%s:%u\n",
                 settings.deviceId.c_str(), settings.mqttHost.c_str(), settings.mqttPort);
 
-  // Give a firmware upload a chance in the same session, so a fresh unit
-  // can be provisioned and flashed to the latest build in one visit.
-  Serial.println("Opening a brief OTA window before restarting...");
-  ArduinoOTA.setHostname(settings.deviceId.c_str());
-  ArduinoOTA.setPassword(OTA_PASSWORD);
-  ArduinoOTA.begin();
-  ledcWrite(LED_PIN, ((uint32_t)LED_BRIGHTNESS_PCT * LED_PWM_MAX_DUTY) / 100); // solid = OTA window active
-  unsigned long otaStart = millis();
-  while (millis() - otaStart < OTA_WINDOW_MS) {
-    ArduinoOTA.handle();
-    delay(10);
-  }
-
+  // No OTA window here -- if firmware needs pushing too, hold the button
+  // 2-10s on the next boot for that (runButtonOtaMode()). Restart straight
+  // into normal operation instead of making every provisioning visit wait
+  // out an unused OTA window.
   blink(1, 50, 50);
   ledcWrite(LED_PIN, 0);
   stopAwakeWatchdog();

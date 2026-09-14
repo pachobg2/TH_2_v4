@@ -60,9 +60,10 @@ for the OTA-only path to use.
    name. Device ID defaults to an auto-generated `th4_XXXXXX` (stable,
    collision-free out of the box) — override it here if you want a
    memorable topic name instead.
-4. Save. The device connects, stores everything to flash, opens a brief
-   `ArduinoOTA` window (LED solid on, in case you want to push newer
-   firmware in the same visit), then restarts into normal operation.
+4. Save. The device connects, stores everything to flash, and restarts
+   straight into normal operation. To also push new firmware in the same
+   visit, hold the button 2-10s on the next boot (see below) instead of
+   waiting through a separate OTA window here.
 
 To reconfigure a unit later (new WiFi network, different broker), hold the
 setup button past 10s while powering it on — same portal, pre-filled with
@@ -120,9 +121,10 @@ Three independent paths:
   portal — connects with already-saved WiFi credentials directly. The
   quickest way to push firmware to an already-configured unit.
 - **Physical button, held past 10s**: opens the setup portal → on
-  success, a normal `ArduinoOTA` window follows automatically before the
-  restart. Use this if you also want to change settings, or need to
-  provision a brand-new unit.
+  success, saves and restarts straight into normal operation (no OTA
+  window here). Use this if you need to change settings or provision a
+  brand-new unit; hold 2-10s on the next boot if you also want to push
+  firmware.
 - **Remote (MQTT)**: flip the retained "OTA Request" switch in Home
   Assistant. This does *not* go through the portal or need physical
   access — the device is already configured and connected, so it just
@@ -147,3 +149,4 @@ here.
 | v4.0.2 | 2026-09-14 | Removed the `wm.autoConnect()` step, which tried the ESP32 WiFi driver's own chip-wide last-saved network before falling back to the portal -- that's separate from and invisible to this project's own settings, so on a reused dev board it wasted a real ~60s connect-timeout trying a stale network from a completely different project before the setup AP ever appeared. Goes straight to `startConfigPortal()` now, since this function is only ever reached when there's no known-good config to try in the first place. |
 | v4.1.0 | 2026-09-14 | Setup button is now hold-duration sensitive instead of a single on/off press: released quickly is a normal cycle, held 2-10s opens a local OTA-only window (no portal, LED solid on), held past 10s opens the full setup portal (LED now blinks once a second instead of sitting solid, via a new non-blocking `WiFiManager` loop). An unconfigured device still always goes straight to the portal regardless of hold duration. |
 | v4.1.1 | 2026-09-14 | Fixed a build error from v4.1.0 (`'ButtonHoldMode' was not declared in this scope`): the Arduino IDE auto-generates prototypes for functions that don't already have one and inserts them near the top of the file, before custom types defined further down are visible. Moved the `ButtonHoldMode` enum itself up next to the `Settings` struct, right after the includes, so it's already declared by the time those prototypes are generated. No behavior change. |
+| v4.1.2 | 2026-09-14 | Removed the automatic 5-minute `ArduinoOTA` window that ran after every successful setup-portal save -- redundant now that a 2-10s button hold opens a dedicated OTA-only window on its own, and it made every provisioning visit wait out an unused window before restarting. The portal now saves and restarts straight into normal operation. |
