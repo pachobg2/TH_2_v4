@@ -668,7 +668,16 @@ void runMaintenanceMode(bool viaButton) {
 
   unsigned long lastBlink = 0;
   bool ledOn = false;
-  while (wm.getConfigPortalActive() && WiFi.status() != WL_CONNECTED) {
+  // Polled every iteration, not just after the loop exits -- WiFiManager
+  // captures submitted parameter values (including this checkbox)
+  // synchronously as soon as the Save form posts, but a failed WiFi
+  // connect attempt (e.g. the password field left blank -- it's never
+  // pre-filled) doesn't end the portal on its own; WiFiManager just keeps
+  // it open and waits for another attempt, so the loop below could
+  // otherwise sit here for the full portal timeout (PORTAL_TIMEOUT_SEC,
+  // 10 minutes) before ever getting a chance to check the box.
+  while (wm.getConfigPortalActive() && WiFi.status() != WL_CONNECTED
+         && strcmp(p_factory_reset.getValue(), "1") != 0) {
     wm.process();
     unsigned long now = millis();
     if (now - lastBlink >= SETUP_LED_BLINK_MS) {
@@ -680,16 +689,11 @@ void runMaintenanceMode(bool viaButton) {
   }
   bool connected = (WiFi.status() == WL_CONNECTED);
 
-  // Checked before the connected/not-connected branch below, and
-  // regardless of its outcome -- a factory reset doesn't need a live WiFi
-  // connection to execute (it only touches flash), and gating it behind a
-  // successful connect meant checking the box and hitting Save silently
-  // did nothing whenever the WiFi fields weren't (re-)filled in too, e.g.
-  // WiFiManager never pre-fills the WiFi password field on this page, so a
-  // save with it left blank fails to connect on its own, independent of
-  // the checkbox. The parameter's own default is "" (not "1"), so this
-  // only fires on an actual submission with the box checked -- a plain
-  // portal timeout leaves it unset.
+  // A factory reset doesn't need a live WiFi connection to execute (it
+  // only touches flash) -- checked as soon as the loop above sees it,
+  // regardless of whether WiFi ever connected. The parameter's own
+  // default is "" (not "1"), so this only fires on an actual submission
+  // with the box checked -- a plain portal timeout leaves it unset.
   if (strcmp(p_factory_reset.getValue(), "1") == 0) {
     Serial.println("Factory reset requested from setup portal -- wiping saved settings and WiFi credentials.");
     settingsPrefs.begin("settings", false);
