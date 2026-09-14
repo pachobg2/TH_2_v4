@@ -79,6 +79,13 @@
 #include <sys/time.h>
 #include "config.h"
 
+// Defined up here, right after the includes, rather than down by the
+// functions that use it -- the Arduino IDE auto-generates prototypes for
+// any function lacking one and inserts them near the top of the file, so a
+// custom type used in such a prototype has to already be visible by this
+// point or the auto-generated prototype fails to compile.
+enum ButtonHoldMode { BUTTON_HOLD_NONE, BUTTON_HOLD_OTA, BUTTON_HOLD_SETUP };
+
 // ---------------- Runtime settings (NVS, not compiled in) ----------------
 // WiFi, MQTT, and device identity used to live in config.h across this
 // fleet; here they're set once via the setup portal and persisted to
@@ -265,9 +272,8 @@ void stopAwakeWatchdog() {
 // Three-way hold detection: released quickly (or not held at all) means a
 // normal cycle; a deliberate 2-10s hold opens an OTA-only window; past 10s
 // opens the full setup portal. See BUTTON_OTA_HOLD_MS/BUTTON_SETUP_HOLD_MS
-// in config.h.
-
-enum ButtonHoldMode { BUTTON_HOLD_NONE, BUTTON_HOLD_OTA, BUTTON_HOLD_SETUP };
+// in config.h. (ButtonHoldMode itself is defined up near the includes --
+// see the comment there.)
 
 const char* buttonHoldModeToString(ButtonHoldMode mode) {
   switch (mode) {
@@ -301,6 +307,8 @@ ButtonHoldMode readButtonHoldMode() {
 
 // ---------------- Function declarations ----------------
 
+ButtonHoldMode readButtonHoldMode();
+const char* buttonHoldModeToString(ButtonHoldMode mode);
 void connectWiFi();
 bool attemptWifiConnect(uint8_t channel);
 bool connectMQTT();
