@@ -68,9 +68,17 @@ internal one — see the wiring note at the top of the `.ino`).
      build error even though nothing here calls into it (same gotcha
      documented in `toshiba_ac_bridge`'s README).
    - `ArduinoOTA`, `Preferences` (bundled with the ESP32 core)
-3. Select board **"ESP32C3 Dev Module"**.
+3. Select board **"ESP32C3 Dev Module"**, and under Tools set **USB CDC On
+   Boot: Enabled** if your board uses native USB for Serial (e.g. a
+   DevKitM-1) — without it, Serial Monitor shows nothing at all, no matter
+   what the firmware does. If you see no serial output whatsoever after
+   flashing, check this first.
 4. Copy `config.h.example` to `config.h`. The defaults work as-is for a
    first flash — WiFi/MQTT are configured later, from the device itself.
+   **`AP_PASSWORD` must be 8-63 characters or left as `""`** — WPA2 rejects
+   anything shorter and the setup network simply never appears (the
+   firmware now falls back to an open network if you get this wrong, but
+   don't rely on that).
 
 ## MQTT / Home Assistant
 
@@ -109,3 +117,4 @@ here.
 | Version | Date | Changes |
 |---|---|---|
 | v4.0.0 | 2026-09-14 | Initial fork of `temp_humidity_sensor`: WiFi/MQTT/device-identity moved from compiled `config.h` to a runtime WiFiManager-based setup portal (AP broadcast, network scan, custom MQTT/device-name fields), auto-generated stable device ID, combined setup+OTA button flow. All sensor/battery/LED/diagnostic behavior otherwise unchanged from `temp_humidity_sensor`. |
+| v4.0.1 | 2026-09-14 | Fixed the setup network silently never appearing when `AP_PASSWORD` is under 8 characters (a hard WPA2 minimum -- `WiFi.softAP()` just fails with no visible error). Now detects this and falls back to an open network instead of failing silently; README/config.h.example call out the requirement explicitly. Also documented the "USB CDC On Boot" board setting needed for Serial to work at all on native-USB boards. |

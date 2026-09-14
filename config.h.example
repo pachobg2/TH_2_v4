@@ -28,9 +28,14 @@ static const char* OTA_PASSWORD = "changeme-ota";
 // Setup portal
 // ------------------------------------------------------------------
 // Password for this device's own temporary "TempSensorV4-XXXXXX" WiFi
-// network during setup. Must be at least 8 characters (WiFiManager
-// requirement for a WPA2 AP) -- it's only broadcast while the portal is
-// open, not during normal operation.
+// network during setup. MUST be 8-63 characters -- that's a hard WPA2
+// requirement, not just this library's preference. Under 8 characters and
+// WiFi.softAP() fails to bring the AP up AT ALL, with no visible error --
+// the network just never appears, which looks identical to a crash. (The
+// firmware detects this and falls back to an open network rather than
+// failing silently, but don't rely on that -- just use 8+ characters here,
+// or set to "" for an intentionally open network.) It's only broadcast
+// while the portal is open, not during normal operation.
 static const char* AP_PASSWORD = "setup1234";
 // How long the setup portal stays open before giving up and going back to
 // sleep with whatever settings it already had.

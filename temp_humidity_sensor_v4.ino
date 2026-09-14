@@ -531,10 +531,23 @@ void runMaintenanceMode(bool forced) {
   wm.addParameter(&p_device_id);
   wm.setConfigPortalTimeout(PORTAL_TIMEOUT_SEC);
 
+  // WPA2 requires an 8-63 character password -- anything shorter and
+  // WiFi.softAP() fails to bring the AP up at all (no visible error, it
+  // just never appears). Rather than fail silently on a bad config.h
+  // value, fall back to an open setup network instead.
+  const char* apPassword = AP_PASSWORD;
+  size_t apPasswordLen = strlen(apPassword);
+  if (apPasswordLen > 0 && apPasswordLen < 8) {
+    Serial.printf("[setup] AP_PASSWORD is %u characters -- WPA2 needs at least 8, "
+                  "falling back to an OPEN setup network instead of failing silently.\n",
+                  (unsigned)apPasswordLen);
+    apPassword = nullptr; // WiFiManager treats null as "open network, no password"
+  }
+
   String apName = "TempSensorV4-" + getShortChipId();
   bool connected = forced
-    ? wm.startConfigPortal(apName.c_str(), AP_PASSWORD)
-    : wm.autoConnect(apName.c_str(), AP_PASSWORD);
+    ? wm.startConfigPortal(apName.c_str(), apPassword)
+    : wm.autoConnect(apName.c_str(), apPassword);
 
   if (!connected) {
     Serial.println("Setup portal timed out / no connection -- resuming normal cycle with existing settings.");
