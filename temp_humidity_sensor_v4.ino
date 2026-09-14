@@ -45,16 +45,20 @@
  *     the chip's own MAC) so units never collide on MQTT topics out of the
  *     box, but you can override it in the portal if you want a memorable
  *     topic name instead.
+ *   - LED brightness is runtime-adjustable from Home Assistant (a "LED
+ *     Brightness" number entity, 0-100%), not just a fixed config.h value
+ *     -- persisted in NVS (settings.ledBrightnessPct), applied on the next
+ *     wake after a change, same latency as the remote OTA-request switch.
  *
- * Everything else -- sensor read, battery curve, LED feedback, boot/fail
- * counters, last-full-charge tracking, HA discovery, deep sleep -- is
- * unchanged from temp_humidity_sensor.
+ * Everything else -- sensor read, battery curve, boot/fail counters,
+ * last-full-charge tracking, HA discovery, deep sleep -- is unchanged from
+ * temp_humidity_sensor.
  *
- * NOT YET FLASHED TO REAL HARDWARE. WiFiManager's exact API has shifted
- * across versions; double-check WiFiManagerParameter/autoConnect/
- * startConfigPortal signatures against whatever version Library Manager
- * installs for you, and treat the first bring-up like any new sketch in
- * this fleet -- watch the Serial Monitor across a full boot.
+ * Flashed and tested on real hardware since v4.0.0. WiFiManager's exact
+ * API has shifted across versions historically (see Version History for
+ * specific method-availability surprises already hit); double-check any
+ * WiFiManager method call here against whatever version Library Manager
+ * installs for you if you hit a build error.
  *
  * Libraries required (Library Manager):
  *   - espMqttClient (bertmelis) — QoS 1 publish with broker PUBACK confirmation
@@ -104,6 +108,7 @@ struct Settings {
   String mqttPassword;
   String deviceId;   // used in MQTT topics/unique_ids -- keep stable once devices exist
   String deviceName; // friendly name shown in Home Assistant
+  uint8_t ledBrightnessPct = LED_BRIGHTNESS_PCT; // config.h value is just the initial default; adjustable at runtime from HA
   bool configured = false;
 };
 
@@ -129,6 +134,7 @@ void loadSettings() {
   settings.mqttPassword = settingsPrefs.getString("mqttPass", "");
   settings.deviceId     = settingsPrefs.getString("deviceId", "th4_" + chipId);
   settings.deviceName   = settingsPrefs.getString("deviceName", "Temp Sensor " + chipId);
+  settings.ledBrightnessPct = settingsPrefs.getUChar("ledBrightPct", LED_BRIGHTNESS_PCT);
   settingsPrefs.end();
 }
 
@@ -143,6 +149,7 @@ void saveSettings() {
   settingsPrefs.putString("mqttPass", settings.mqttPassword);
   settingsPrefs.putString("deviceId", settings.deviceId);
   settingsPrefs.putString("deviceName", settings.deviceName);
+  settingsPrefs.putUChar("ledBrightPct", settings.ledBrightnessPct);
   settingsPrefs.end();
 }
 
@@ -152,11 +159,12 @@ void saveSettings() {
 String TOPIC_TEMP, TOPIC_HUMIDITY, TOPIC_BATTERY_V, TOPIC_BATTERY_PCT, TOPIC_RSSI,
        TOPIC_LAST_UPDATE, TOPIC_RESET_REASON, TOPIC_FAIL_COUNT, TOPIC_TOTAL_FAIL_COUNT,
        TOPIC_OTA_REQUEST, TOPIC_BATTERY_LOW, TOPIC_BOOT_COUNT, TOPIC_FW_VERSION,
-       TOPIC_LAST_FULL_CHARGE;
+       TOPIC_LAST_FULL_CHARGE, TOPIC_LED_BRIGHTNESS, TOPIC_LED_BRIGHTNESS_SET;
 String DISCOVERY_TEMP, DISCOVERY_HUMIDITY, DISCOVERY_BATTERY_V, DISCOVERY_BATTERY_PCT,
        DISCOVERY_RSSI, DISCOVERY_LAST_UPDATE, DISCOVERY_RESET_REASON, DISCOVERY_FAIL_COUNT,
        DISCOVERY_TOTAL_FAIL_COUNT, DISCOVERY_OTA_REQUEST, DISCOVERY_BATTERY_LOW,
-       DISCOVERY_BOOT_COUNT, DISCOVERY_FW_VERSION, DISCOVERY_LAST_FULL_CHARGE;
+       DISCOVERY_BOOT_COUNT, DISCOVERY_FW_VERSION, DISCOVERY_LAST_FULL_CHARGE,
+       DISCOVERY_LED_BRIGHTNESS;
 
 void buildTopics() {
   String base = String("home/") + settings.deviceId;
@@ -174,6 +182,8 @@ void buildTopics() {
   TOPIC_BOOT_COUNT       = base + "/boot_count";
   TOPIC_FW_VERSION       = base + "/firmware_version";
   TOPIC_LAST_FULL_CHARGE = base + "/last_full_charge";
+  TOPIC_LED_BRIGHTNESS     = base + "/led_brightness";
+  TOPIC_LED_BRIGHTNESS_SET = base + "/led_brightness/set";
 
   String sbase = String("homeassistant/sensor/") + settings.deviceId;
   DISCOVERY_TEMP             = sbase + "/temperature/config";
@@ -190,6 +200,7 @@ void buildTopics() {
   DISCOVERY_LAST_FULL_CHARGE = sbase + "/last_full_charge/config";
   DISCOVERY_BATTERY_LOW      = String("homeassistant/binary_sensor/") + settings.deviceId + "/battery_low/config";
   DISCOVERY_OTA_REQUEST      = String("homeassistant/switch/") + settings.deviceId + "/ota_request/config";
+  DISCOVERY_LED_BRIGHTNESS   = String("homeassistant/number/") + settings.deviceId + "/led_brightness/config";
 }
 
 // ---------------- Persisted state (survives deep sleep) ----------------
@@ -226,6 +237,15 @@ void onMqttPublish(uint16_t packetId) {
 volatile bool g_otaRequestReceived = false;
 char g_otaRequestPayload[8] = {0};
 
+// Same pattern as the OTA request above: HA publishes retained, we're only
+// subscribed for a moment each cycle, and the broker delivers it
+// immediately on subscribe. A command applies on this wake and is echoed
+// back as the new state -- since the device sleeps between cycles, a
+// change from HA can take up to one sleep interval to actually show up on
+// the LED, same latency as the OTA-request switch.
+volatile bool g_brightnessCmdReceived = false;
+char g_brightnessCmdPayload[8] = {0};
+
 void onMqttMessage(const espMqttClientTypes::MessageProperties& properties, const char* topic,
                     const uint8_t* payload, size_t len, size_t index, size_t total) {
   if (TOPIC_OTA_REQUEST.equals(topic)) {
@@ -233,6 +253,11 @@ void onMqttMessage(const espMqttClientTypes::MessageProperties& properties, cons
     memcpy(g_otaRequestPayload, payload, copyLen);
     g_otaRequestPayload[copyLen] = '\0';
     g_otaRequestReceived = true;
+  } else if (TOPIC_LED_BRIGHTNESS_SET.equals(topic)) {
+    size_t copyLen = len < sizeof(g_brightnessCmdPayload) - 1 ? len : sizeof(g_brightnessCmdPayload) - 1;
+    memcpy(g_brightnessCmdPayload, payload, copyLen);
+    g_brightnessCmdPayload[copyLen] = '\0';
+    g_brightnessCmdReceived = true;
   }
 }
 
@@ -322,6 +347,7 @@ int publishState(float tempC, float humidity, float battV, float battPct, int rs
 void goToSleep();
 float readBatteryVoltage();
 float batteryPercentage(float v);
+uint32_t ledDutyForBrightness();
 void blink(int times, uint32_t onMs, uint32_t gapMs);
 void runOtaWindow();
 void enterOtaMode();
@@ -447,6 +473,8 @@ void setup() {
       // it, with no extra blocking wait added on our part.
       g_otaRequestReceived = false;
       mqttClient.subscribe(TOPIC_OTA_REQUEST.c_str(), 1);
+      g_brightnessCmdReceived = false;
+      mqttClient.subscribe(TOPIC_LED_BRIGHTNESS_SET.c_str(), 1);
 
       if (!discoverySent) {
         sendDiscoveryConfig();
@@ -470,6 +498,21 @@ void setup() {
         enterOtaMode();
         otaModeEntered = true;
       }
+
+      if (g_brightnessCmdReceived) {
+        int requested = atoi(g_brightnessCmdPayload);
+        if (requested < 0) requested = 0;
+        if (requested > 100) requested = 100;
+        if ((uint8_t)requested != settings.ledBrightnessPct) {
+          settings.ledBrightnessPct = (uint8_t)requested;
+          saveSettings();
+          Serial.printf("LED brightness set to %u%% via HA.\n", settings.ledBrightnessPct);
+        }
+      }
+      // Echoed back every cycle (not just on change) so the entity always
+      // reflects the actual saved value, even after a factory reset or a
+      // brand-new device's first-ever connect.
+      publishWithAck(TOPIC_LED_BRIGHTNESS.c_str(), String(settings.ledBrightnessPct).c_str(), true);
     } else {
       Serial.println("MQTT connect failed, skipping publish this cycle.");
       connectFailCount++;
@@ -599,17 +642,20 @@ void runMaintenanceMode(bool viaButton) {
 
   WiFiManager wm;
   // Shown at the top of every portal page, including the first one you
-  // land on -- so you can tell which build a unit is running without
-  // digging through Serial or Home Assistant. setCustomBodyHeader() would
-  // be the direct way to do this, but it's not available in every
-  // WiFiManager release (missing on at least one version this fleet has
-  // built against), so this uses setCustomHeadElement() instead -- a much
-  // older, more consistently-available API -- with a CSS ::before to
-  // render text without needing a body-injection hook. versionHeader has
+  // land on -- so you can tell which unit and which build you're looking
+  // at without digging through Serial or Home Assistant. Two lines (brand
+  // title, then firmware version) via a single CSS ::before -- "\A " is
+  // the CSS escape for a literal newline in generated content, rendered
+  // as an actual line break by white-space:pre-line. setCustomBodyHeader()
+  // would be the more direct way to inject this, but it's not available
+  // in every WiFiManager release (missing on at least one version this
+  // fleet has built against), so this uses setCustomHeadElement() instead
+  // -- a much older, more consistently-available API. versionHeader has
   // to stay alive for as long as wm does (WiFiManager stores the pointer,
   // not a copy), so it's a local here rather than a temporary.
-  String versionHeader = "<style>body::before{content:'" + String(DEVICE_MODEL) + " - firmware v"
-                          + String(FIRMWARE_VERSION) + "';display:block;text-align:center;color:#888;margin:4px 0;}</style>";
+  String versionHeader = "<style>body::before{content:'" + String(DEVICE_MANUFACTURER) + " " + String(DEVICE_MODEL)
+                          + " Sensor\\A Firmware v" + String(FIRMWARE_VERSION)
+                          + "';white-space:pre-line;display:block;text-align:center;color:#888;margin:4px 0;}</style>";
   wm.setCustomHeadElement(versionHeader.c_str());
   wm.addParameter(&p_mqtt_host);
   wm.addParameter(&p_mqtt_port);
@@ -698,7 +744,7 @@ void runMaintenanceMode(bool viaButton) {
     if (now - lastBlink >= SETUP_LED_BLINK_MS) {
       lastBlink = now;
       ledOn = !ledOn;
-      ledcWrite(LED_PIN, ledOn ? ((uint32_t)LED_BRIGHTNESS_PCT * LED_PWM_MAX_DUTY) / 100 : 0);
+      ledcWrite(LED_PIN, ledOn ? ledDutyForBrightness() : 0);
     }
     delay(10);
   }
@@ -1009,6 +1055,27 @@ void sendDiscoveryConfig() {
     + "\"state_topic\":\"" + TOPIC_OTA_REQUEST + "\","
     + devBlock + "}";
   publishWithAck(DISCOVERY_OTA_REQUEST.c_str(), otaRequestPayload.c_str(), true);
+
+  // Also a control, not a reading -- no expire_after, same reasoning as
+  // the OTA switch above. A change here only takes effect on the device's
+  // next wake (it applies the retained command, then echoes the new value
+  // back as state), since it's asleep the rest of the time.
+  String ledBrightnessPayload = String("{")
+    + "\"name\":\"" + settings.deviceName + " LED Brightness\","
+    + "\"unique_id\":\"" + settings.deviceId + "_led_brightness\","
+    + "\"entity_category\":\"config\","
+    + "\"icon\":\"mdi:brightness-6\","
+    + "\"min\":0,"
+    + "\"max\":100,"
+    + "\"step\":1,"
+    + "\"unit_of_measurement\":\"%\","
+    + "\"mode\":\"slider\","
+    + "\"optimistic\":false,"
+    + "\"retain\":true,"
+    + "\"command_topic\":\"" + TOPIC_LED_BRIGHTNESS_SET + "\","
+    + "\"state_topic\":\"" + TOPIC_LED_BRIGHTNESS + "\","
+    + devBlock + "}";
+  publishWithAck(DISCOVERY_LED_BRIGHTNESS.c_str(), ledBrightnessPayload.c_str(), true);
 }
 
 int publishState(float tempC, float humidity, float battV, float battPct, int rssi, const String& resetReasonStr, uint32_t failCount) {
@@ -1257,8 +1324,15 @@ String resetReasonToString(esp_reset_reason_t reason) {
 
 // ---------------- LED / OTA ----------------
 
+// settings.ledBrightnessPct rather than the config.h LED_BRIGHTNESS_PCT
+// constant -- that constant is only the initial default (see Settings);
+// the live value is runtime-adjustable via the "LED Brightness" HA entity.
+uint32_t ledDutyForBrightness() {
+  return ((uint32_t)settings.ledBrightnessPct * LED_PWM_MAX_DUTY) / 100;
+}
+
 void blink(int times, uint32_t onMs, uint32_t gapMs) {
-  uint32_t duty = ((uint32_t)LED_BRIGHTNESS_PCT * LED_PWM_MAX_DUTY) / 100;
+  uint32_t duty = ledDutyForBrightness();
   for (int i = 0; i < times; i++) {
     ledcWrite(LED_PIN, duty);
     delay(onMs);
@@ -1285,7 +1359,7 @@ void enterOtaMode() {
   ArduinoOTA.setHostname(settings.deviceId.c_str());
   ArduinoOTA.setPassword(OTA_PASSWORD);
   ArduinoOTA.begin();
-  ledcWrite(LED_PIN, ((uint32_t)LED_BRIGHTNESS_PCT * LED_PWM_MAX_DUTY) / 100); // solid LED = OTA mode active
+  ledcWrite(LED_PIN, ledDutyForBrightness()); // solid LED = OTA mode active
   runOtaWindow();
   ledcWrite(LED_PIN, 0);
   blink(1, 50, 50); // brief off/on/off flourish before sleeping

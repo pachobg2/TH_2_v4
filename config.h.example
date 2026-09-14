@@ -69,7 +69,11 @@ static const int SCL_PIN                 = 5;
 static const gpio_num_t SETUP_PIN        = GPIO_NUM_0;
 
 // Status LED brightness, driven via LEDC PWM instead of a plain digital
-// on/off so it can be dimmed. 100 = full brightness.
+// on/off so it can be dimmed. 100 = full brightness. This is only the
+// initial default for a never-configured device -- the live value is
+// runtime-adjustable via the "LED Brightness" number entity in Home
+// Assistant (settings.ledBrightnessPct, persisted in NVS), so changing
+// this afterward has no effect on an already-configured unit.
 static const uint8_t LED_BRIGHTNESS_PCT = 100;
 static const uint32_t LED_PWM_FREQ_HZ   = 5000;
 static const uint8_t LED_PWM_RESOLUTION = 8; // 0-255

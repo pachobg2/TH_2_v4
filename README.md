@@ -52,10 +52,11 @@ for the OTA-only path to use.
    `AP_PASSWORD` from `config.h` (default `setup1234`), LED blinking once
    a second for as long as the portal is open.
 2. Connect to that network from your phone or laptop. A captive-portal
-   page should open automatically (or browse to `192.168.4.1`). The device
-   model and firmware version are shown at the top of every portal page,
-   including this first one, so you can tell which build a unit is running
-   without checking Serial or Home Assistant.
+   page should open automatically (or browse to `192.168.4.1`). The top of
+   every portal page — including this first one — shows the device brand
+   and model (e.g. "P@cho TH-2 Sensor") and the firmware version below it,
+   so you can tell which unit and which build you're looking at without
+   checking Serial or Home Assistant.
 3. Pick your WiFi network from the scanned list (or enter one manually),
    plus fill in your MQTT broker host/port/username/password and a device
    name. Device ID defaults to an auto-generated `th4_XXXXXX` (stable,
@@ -140,9 +141,23 @@ internal one — see the wiring note at the top of the `.ino`).
 Base topic: `home/<device_id>/...` (device ID set during setup, default
 `th4_XXXXXX`). Topic layout, HA discovery, and `expire_after` behavior are
 identical to `temp_humidity_sensor` — see that project's README for the
-full topic table. The only addition is that `<device_id>` and the "friendly
-name" shown in Home Assistant are both set through the portal instead of
-`config.h`.
+full topic table, including the "Last Full Charge" diagnostic (shared
+across every battery sensor in this fleet). The only addition is that
+`<device_id>` and the "friendly name" shown in Home Assistant are both set
+through the portal instead of `config.h`.
+
+### LED brightness
+
+Unlike the rest of this fleet, where `LED_BRIGHTNESS_PCT` in `config.h` is
+fixed at compile time, v4 exposes it to Home Assistant as a **"LED
+Brightness"** number entity (0-100%, `homeassistant/number/...`) —
+`config.h`'s value is only the initial default for a never-configured
+device. Changing the slider in HA is picked up on the device's next wake
+(it applies the retained command, then echoes the new value back as
+state), same latency as the "OTA Request" switch, since the device is
+asleep the rest of the time. The value is saved to flash (NVS), so it
+survives power loss and firmware updates, and is reset back to the
+`config.h` default only by a factory reset.
 
 ## OTA updates
 
@@ -187,3 +202,4 @@ here.
 | v4.2.3 | 2026-09-14 | Fixed a build error from v4.2.2: `setCustomBodyHeader()` doesn't exist on the installed WiFiManager version (`'class WiFiManager' has no member named 'setCustomBodyHeader'`). Switched to `setCustomHeadElement()` -- a much older, more consistently-available API -- injecting the same version text via a CSS `body::before` instead. Same visible result, no behavior change. |
 | v4.2.4 | 2026-09-14 | Fixed the v4.2.1 factory reset fix still not firing on real hardware: the checkbox value was only checked *after* the portal wait loop exited, but that loop doesn't exit promptly on a failed WiFi connect (e.g. an intentionally-blank password) -- WiFiManager just keeps the portal open and retries, so it could sit there for the full 10-minute portal timeout before the checkbox was ever looked at. Now polled every loop iteration, exiting immediately once the box is checked and Save is hit, regardless of WiFi outcome. |
 | v4.3.0 | 2026-09-14 | Replaced the factory reset checkbox with a button hold: still not firing on real hardware after two rounds of fixes, and the actual root cause turned out to be WiFiManager's custom-attribute mechanism itself -- adding `value="1"` via a checkbox's custom-attribute string collides with the framework's own `value=''` attribute on the same generated `<input>` tag, so the checked state never made it into the submitted form correctly in the first place. Replaced entirely: holding the setup button again for `FACTORY_RESET_HOLD_MS` (5s) while the portal is open now triggers the reset directly, no web form involved. |
+| v4.4.0 | 2026-09-14 | Added a "LED Brightness" number entity in Home Assistant (0-100%, persisted in NVS, applied on the device's next wake) -- `config.h`'s `LED_BRIGHTNESS_PCT` is now only the initial default for a never-configured unit rather than a fixed value. Also added a device brand/model line ("P@cho TH-2 Sensor") above the firmware version at the top of every setup-portal page. Confirmed the "Last Full Charge" diagnostic (shared with the rest of the battery-powered fleet) has been present since v4.0.0. |
