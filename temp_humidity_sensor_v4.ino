@@ -681,11 +681,23 @@ void runMaintenanceMode(bool viaButton) {
   wm.addParameter(&p_device_name);
   wm.addParameter(&p_device_id);
   wm.setConfigPortalTimeout(PORTAL_TIMEOUT_SEC);
-  // Hide the built-in "Erase" menu button -- it only clears the radio's own
-  // WiFi credentials, not our settings, which reads as a half-working
-  // factory reset and could be mistaken for the real one (see the button
-  // hold below).
-  std::vector<const char*> menu = {"wifi", "param", "info", "sep", "restart", "exit"};
+  // Deliberately NOT calling setParamsPage() and NOT listing "param" in
+  // the menu below -- WiFiManager's own docs warn setParamsPage() and a
+  // custom setMenu() "should not be combined". Its _paramsInWifi flag
+  // (which controls whether addParameter() fields render on the same
+  // "Configure WiFi" page as the network picker, vs. a separate "Setup"
+  // page reachable only via a "param" menu entry) defaults to true, which
+  // is exactly the one-page behavior wanted here -- so the fix for the
+  // portal reading as two disconnected pages (pick WiFi, reboot, hold the
+  // button again, separately find MQTT settings) was removing "param"
+  // from the line below, which had been overriding that default and
+  // splitting them after all.
+  //
+  // Also hides the built-in "Erase" menu button -- it only clears the
+  // radio's own WiFi credentials, not our settings, which reads as a
+  // half-working factory reset and could be mistaken for the real one
+  // (see the button hold below).
+  std::vector<const char*> menu = {"wifi", "info", "sep", "restart", "exit"};
   wm.setMenu(menu);
 
   // WPA2 requires an 8-63 character password -- anything shorter and

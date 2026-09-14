@@ -52,20 +52,21 @@ for the OTA-only path to use.
    `AP_PASSWORD` from `config.h` (default `setup1234`), LED blinking once
    a second for as long as the portal is open.
 2. Connect to that network from your phone or laptop. A captive-portal
-   page should open automatically (or browse to `192.168.4.1`). The top of
-   every portal page — including this first one — shows the device brand
-   and model (e.g. "P@cho TH-2 Sensor") and the firmware version below it,
-   so you can tell which unit and which build you're looking at without
-   checking Serial or Home Assistant.
-3. Pick your WiFi network from the scanned list (or enter one manually).
-   **Keep scrolling** — a "MQTT & device settings" heading marks where the
-   rest of the same form continues below the WiFi fields: broker
-   host/port/username/password and a device name. Device ID defaults to an
-   auto-generated `th4_XXXXXX` (stable, collision-free out of the box) —
-   override it here if you want a memorable topic name instead. **MQTT
-   broker host is a required field** — the browser won't let you submit
-   the form with it blank, so there's no way to save the WiFi half only by
-   mistake.
+   landing page should open automatically (or browse to `192.168.4.1`),
+   showing a short menu — **only one button matters here: "Configure
+   WiFi"**. The top of every portal page — including this landing one —
+   shows the device brand and model (e.g. "P@cho TH-2 Sensor") and the
+   firmware version below it, so you can tell which unit and which build
+   you're looking at without checking Serial or Home Assistant.
+3. Tap **"Configure WiFi"**. This is the *only* page you need: pick your
+   WiFi network from the scanned list (or enter one manually), then **keep
+   scrolling** — a "MQTT & device settings" heading marks where the same
+   form continues below the WiFi fields: broker host/port/username/
+   password and a device name. Device ID defaults to an auto-generated
+   `th4_XXXXXX` (stable, collision-free out of the box) — override it here
+   if you want a memorable topic name instead. **MQTT broker host is a
+   required field** — the browser won't let you submit the form with it
+   blank, so there's no way to save the WiFi half only by mistake.
 4. Save (once, for the whole form). The device connects, stores
    everything to flash, and restarts straight into normal operation. To
    also push new firmware in the same visit, hold the button 2-10s on the
@@ -208,4 +209,5 @@ development). Versioning restarts clean from v4.0.0 below the beta rows.
 | v4.3.0b | 2026-09-14 | Replaced the factory reset checkbox with a button hold: still not firing on real hardware after two rounds of fixes, and the actual root cause turned out to be WiFiManager's custom-attribute mechanism itself -- adding `value="1"` via a checkbox's custom-attribute string collides with the framework's own `value=''` attribute on the same generated `<input>` tag, so the checked state never made it into the submitted form correctly in the first place. Replaced entirely: holding the setup button again for `FACTORY_RESET_HOLD_MS` (5s) while the portal is open now triggers the reset directly, no web form involved. |
 | v4.4.0b | 2026-09-14 | Added a "LED Brightness" number entity in Home Assistant (0-100%, persisted in NVS, applied on the device's next wake) -- `config.h`'s `LED_BRIGHTNESS_PCT` is now only the initial default for a never-configured unit rather than a fixed value. Also added a device brand/model line ("P@cho TH-2 Sensor") above the firmware version at the top of every setup-portal page. Confirmed the "Last Full Charge" diagnostic (shared with the rest of the battery-powered fleet) has been present since v4.0.0b. |
 | v4.0.0 | 2026-09-14 | **Beta cycle above declared over; `FIRMWARE_VERSION` reset to `4.0.0` as the stable baseline.** No code change from v4.4.0b. |
-| v4.0.1 | 2026-09-14 | Fixed the setup portal reading as two separate steps: MQTT/device fields are on the same "Configure WiFi" form as the WiFi picker (submitted together, one Save), but with no visual break between the two it was easy to hit Save right after picking a network without reaching the MQTT fields below, ending up with a device that connects to WiFi but never marks itself configured. Added a heading separating the two sections, and made the MQTT host field HTML `required` so the browser won't submit the form with it blank at all. |
+| v4.0.1 | 2026-09-14 | Attempted fix for the setup portal reading as two separate steps, based on a wrong assumption that MQTT/device fields were already on the same "Configure WiFi" form as the WiFi picker -- added a heading and a `required` attribute on the MQTT host field to make that (supposedly) already-combined form clearer. Didn't fix anything: on real hardware these were genuinely two separate pages ("Configure WiFi" for WiFi only, a separate "Setup" menu entry for MQTT only), not one form with a scroll. See v4.0.2. |
+| v4.0.2 | 2026-09-14 | Actually fixed the two-page setup portal this time: WiFiManager's own docs warn that `setParamsPage()` and a custom `setMenu()` "should not be combined" -- our `setMenu()` list included `"param"` as its own menu entry (a leftover from before the factory reset checkbox was replaced by a button hold), which was overriding the library's default of rendering `addParameter()` fields directly on the "Configure WiFi" page. Removed `"param"` from the menu; the WiFi picker and MQTT/device fields are now genuinely one page, one form, one Save -- confirmed this was the real root cause, not a scrolling/visibility issue. |
