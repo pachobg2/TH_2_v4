@@ -8,12 +8,17 @@ firmware image you can flash onto any unit and configure from a phone,
 closer to how a commercial IoT device behaves, rather than editing and
 rebuilding per device like the rest of this fleet.
 
-**Not yet flashed to real hardware.** This was written without access to
-a WiFiManager-equipped board to test against — treat the first bring-up
-like any new sketch here: watch the Serial Monitor across a full boot,
-and double-check `WiFiManagerParameter`/`autoConnect`/`startConfigPortal`
-against whatever WiFiManager version Library Manager actually installs,
-since its API has shifted across versions.
+**Not yet flashed to real hardware for this change.** The setup portal
+now runs `WiFiManager` in non-blocking mode (`setConfigPortalBlocking(false)`
++ a loop calling `process()`/`getConfigPortalActive()`) so the LED can
+blink while the portal is open, instead of the simpler blocking
+`startConfigPortal()` call used before — this is a less commonly exercised
+part of the library's API than the blocking path. Treat the first bring-up
+like any new sketch here: watch the Serial Monitor across a full boot, and
+double-check `WiFiManagerParameter`/`startConfigPortal`/
+`setConfigPortalBlocking`/`process`/`getConfigPortalActive` against
+whatever WiFiManager version Library Manager actually installs, since its
+API has shifted across versions.
 
 ## Files
 
@@ -24,12 +29,30 @@ since its API has shifted across versions.
   (`OTA_PASSWORD`, `AP_PASSWORD`) you might want to change from the shared
   default. Keep `config.h` out of git (already covered by `.gitignore`).
 
+## Setup button behavior
+
+The button on `SETUP_PIN` is hold-duration sensitive:
+
+- **Released quickly** (under `BUTTON_OTA_HOLD_MS`, 2s): not a deliberate
+  hold, treated as no press at all — normal report cycle.
+- **Held 2-10s**: opens a local OTA-only window (LED solid on) using the
+  already-saved WiFi credentials — no portal, just a chance to push new
+  firmware without walking over to a laptop. Same idea as the remote
+  MQTT "OTA Request" switch, just triggered by the button instead.
+- **Held past 10s**: opens the full setup portal (LED blinking once a
+  second, `SETUP_LED_BLINK_MS`) — see below.
+
+**First power-on** always goes straight to the full setup portal
+regardless of hold duration, since there are no saved WiFi credentials yet
+for the OTA-only path to use.
+
 ## How setup works
 
-1. **First power-on** (or holding the setup button at boot on an
+1. **First power-on** (or holding the setup button past 10s at boot on an
    already-configured unit): the device broadcasts its own WiFi network,
    `TempSensorV4-XXXXXX` (last 6 hex digits of its chip ID), protected by
-   `AP_PASSWORD` from `config.h` (default `setup1234`).
+   `AP_PASSWORD` from `config.h` (default `setup1234`), LED blinking once
+   a second for as long as the portal is open.
 2. Connect to that network from your phone or laptop. A captive-portal
    page should open automatically (or browse to `192.168.4.1`).
 3. Pick your WiFi network from the scanned list (or enter one manually),
@@ -38,12 +61,12 @@ since its API has shifted across versions.
    collision-free out of the box) — override it here if you want a
    memorable topic name instead.
 4. Save. The device connects, stores everything to flash, opens a brief
-   `ArduinoOTA` window (in case you want to push newer firmware in the
-   same visit), then restarts into normal operation.
+   `ArduinoOTA` window (LED solid on, in case you want to push newer
+   firmware in the same visit), then restarts into normal operation.
 
 To reconfigure a unit later (new WiFi network, different broker), hold the
-setup button while powering it on — same portal, pre-filled with its
-current settings.
+setup button past 10s while powering it on — same portal, pre-filled with
+its current settings.
 
 ## Hardware
 
@@ -91,16 +114,19 @@ name" shown in Home Assistant are both set through the portal instead of
 
 ## OTA updates
 
-Two independent paths, same as the rest of this fleet's battery sensors:
+Three independent paths:
 
-- **Physical button**: hold at boot → opens the setup portal → on success,
-  a normal `ArduinoOTA` window follows automatically before the restart.
-  Use this even if you only want to push firmware, not change settings —
-  just click through the portal with the existing values.
+- **Physical button, held 2-10s**: OTA-only window (LED solid on), no
+  portal — connects with already-saved WiFi credentials directly. The
+  quickest way to push firmware to an already-configured unit.
+- **Physical button, held past 10s**: opens the setup portal → on
+  success, a normal `ArduinoOTA` window follows automatically before the
+  restart. Use this if you also want to change settings, or need to
+  provision a brand-new unit.
 - **Remote (MQTT)**: flip the retained "OTA Request" switch in Home
-  Assistant. This does *not* go through the portal — the device is
-  already configured and connected, so it just opens an OTA window
-  directly, exactly like `temp_humidity_sensor`.
+  Assistant. This does *not* go through the portal or need physical
+  access — the device is already configured and connected, so it just
+  opens an OTA window directly, exactly like `temp_humidity_sensor`.
 
 ## Config file
 
@@ -119,3 +145,4 @@ here.
 | v4.0.0 | 2026-09-14 | Initial fork of `temp_humidity_sensor`: WiFi/MQTT/device-identity moved from compiled `config.h` to a runtime WiFiManager-based setup portal (AP broadcast, network scan, custom MQTT/device-name fields), auto-generated stable device ID, combined setup+OTA button flow. All sensor/battery/LED/diagnostic behavior otherwise unchanged from `temp_humidity_sensor`. |
 | v4.0.1 | 2026-09-14 | Fixed the setup network silently never appearing when `AP_PASSWORD` is under 8 characters (a hard WPA2 minimum -- `WiFi.softAP()` just fails with no visible error). Now detects this and falls back to an open network instead of failing silently; README/config.h.example call out the requirement explicitly. Also documented the "USB CDC On Boot" board setting needed for Serial to work at all on native-USB boards. |
 | v4.0.2 | 2026-09-14 | Removed the `wm.autoConnect()` step, which tried the ESP32 WiFi driver's own chip-wide last-saved network before falling back to the portal -- that's separate from and invisible to this project's own settings, so on a reused dev board it wasted a real ~60s connect-timeout trying a stale network from a completely different project before the setup AP ever appeared. Goes straight to `startConfigPortal()` now, since this function is only ever reached when there's no known-good config to try in the first place. |
+| v4.1.0 | 2026-09-14 | Setup button is now hold-duration sensitive instead of a single on/off press: released quickly is a normal cycle, held 2-10s opens a local OTA-only window (no portal, LED solid on), held past 10s opens the full setup portal (LED now blinks once a second instead of sitting solid, via a new non-blocking `WiFiManager` loop). An unconfigured device still always goes straight to the portal regardless of hold duration. |

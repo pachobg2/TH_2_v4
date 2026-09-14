@@ -26,12 +26,18 @@
  *     new unit, just power it on and configure it from your phone.
  *   - Settings are saved to flash (NVS via Preferences), not compiled in,
  *     so the exact same firmware binary works on every unit.
- *   - The setup button now opens this portal instead of jumping straight
- *     to OTA -- once the portal succeeds (or if it was already configured
- *     and you just want to push new firmware), it opens a normal
- *     ArduinoOTA window before restarting into normal operation. Remote
- *     OTA via the "OTA Request" MQTT switch is unchanged from
- *     temp_humidity_sensor and doesn't go through the portal at all.
+ *   - The setup button is now hold-duration sensitive: released quickly
+ *     (under BUTTON_OTA_HOLD_MS) is just a normal cycle, same as no press
+ *     at all. Held 2-10s opens a button-triggered OTA-only window (no
+ *     portal, LED solid on) -- same idea as the remote MQTT "OTA Request"
+ *     switch, just triggered locally. Held past 10s opens the full setup
+ *     portal (LED blinking once a second) -- once it succeeds, it opens a
+ *     normal ArduinoOTA window too before restarting into normal
+ *     operation. An unconfigured device always goes straight to the
+ *     portal regardless of hold duration, since the OTA-only path needs
+ *     already-saved WiFi credentials that don't exist yet. Remote OTA via
+ *     the "OTA Request" MQTT switch is unchanged from temp_humidity_sensor
+ *     and doesn't go through any of this at all.
  *   - Device ID defaults to an auto-generated, stable "th4_XXXXXX" (from
  *     the chip's own MAC) so units never collide on MQTT topics out of the
  *     box, but you can override it in the portal if you want a memorable
@@ -255,6 +261,44 @@ void stopAwakeWatchdog() {
   }
 }
 
+// ---------------- Setup button ----------------
+// Three-way hold detection: released quickly (or not held at all) means a
+// normal cycle; a deliberate 2-10s hold opens an OTA-only window; past 10s
+// opens the full setup portal. See BUTTON_OTA_HOLD_MS/BUTTON_SETUP_HOLD_MS
+// in config.h.
+
+enum ButtonHoldMode { BUTTON_HOLD_NONE, BUTTON_HOLD_OTA, BUTTON_HOLD_SETUP };
+
+const char* buttonHoldModeToString(ButtonHoldMode mode) {
+  switch (mode) {
+    case BUTTON_HOLD_OTA:   return "2-10s (OTA)";
+    case BUTTON_HOLD_SETUP: return ">10s (setup)";
+    default:                return "none";
+  }
+}
+
+// Measures how long the setup button is held at boot. If this boot was
+// itself woken by the button (deep-sleep GPIO wake), it may already have
+// been held for a moment before we get here -- that's fine, we just start
+// the clock now rather than trying to account for that. Commits to
+// BUTTON_HOLD_SETUP the instant the hold crosses BUTTON_SETUP_HOLD_MS,
+// without waiting for release, so a long hold feels immediate rather than
+// requiring you to guess when to let go.
+ButtonHoldMode readButtonHoldMode() {
+  if (digitalRead(SETUP_PIN) != LOW) return BUTTON_HOLD_NONE;
+
+  unsigned long start = millis();
+  while (digitalRead(SETUP_PIN) == LOW) {
+    if (millis() - start >= BUTTON_SETUP_HOLD_MS) {
+      return BUTTON_HOLD_SETUP;
+    }
+    delay(20);
+  }
+
+  unsigned long heldMs = millis() - start;
+  return (heldMs >= BUTTON_OTA_HOLD_MS) ? BUTTON_HOLD_OTA : BUTTON_HOLD_NONE;
+}
+
 // ---------------- Function declarations ----------------
 
 void connectWiFi();
@@ -269,7 +313,8 @@ float batteryPercentage(float v);
 void blink(int times, uint32_t onMs, uint32_t gapMs);
 void runOtaWindow();
 void enterOtaMode();
-void runMaintenanceMode(bool forced);
+void runButtonOtaMode();
+void runMaintenanceMode(bool viaButton);
 bool syncTimeUtc();
 String getCurrentTimestampUtc();
 String resetReasonToString(esp_reset_reason_t reason);
@@ -309,22 +354,37 @@ void setup() {
   loadSettings();
 
   // Check this as early as possible, before any slow work (sensor reads,
-  // battery averaging). A wake caused by the button itself, or the button
-  // still being physically held, both count -- either way we want to skip
-  // straight to the maintenance portal rather than sitting through a full
-  // normal report cycle first. An unconfigured device (no saved WiFi yet)
-  // always goes to the portal too, regardless of the button.
+  // battery averaging). readButtonHoldMode() blocks for as long as the
+  // button is actually held (up to BUTTON_SETUP_HOLD_MS), so this is also
+  // where that hold time gets spent. An unconfigured device (no saved WiFi
+  // yet) always goes straight to the portal, regardless of hold duration --
+  // the OTA-only path below needs already-saved credentials it doesn't have.
   esp_sleep_wakeup_cause_t wakeupCause = esp_sleep_get_wakeup_cause();
-  bool buttonHeld = (digitalRead(SETUP_PIN) == LOW) || (wakeupCause == ESP_SLEEP_WAKEUP_GPIO);
-  bool needsMaintenance = buttonHeld || !settings.configured;
-  Serial.printf("Boot #%lu, wakeup cause: %d, setup button: %s, configured: %s\n",
-                bootCount, (int)wakeupCause, buttonHeld ? "PRESSED" : "released",
+  ButtonHoldMode buttonMode = readButtonHoldMode();
+  bool forceSetup = !settings.configured;
+  Serial.printf("Boot #%lu, wakeup cause: %d, button hold: %s, configured: %s\n",
+                bootCount, (int)wakeupCause, buttonHoldModeToString(buttonMode),
                 settings.configured ? "yes" : "no");
 
-  if (needsMaintenance) {
-    runMaintenanceMode(buttonHeld);
+  if (forceSetup || buttonMode == BUTTON_HOLD_SETUP) {
+    runMaintenanceMode(buttonMode == BUTTON_HOLD_SETUP);
     // Only reached if the portal timed out / failed to connect -- a
     // successful run restarts the device itself and never returns here.
+
+    if (DEBUG_MODE) {
+      stopAwakeWatchdog();
+      Serial.println("=== DEBUG_MODE: staying connected, entering loop() ===");
+      return;
+    }
+
+    WiFi.disconnect(true);
+    stopAwakeWatchdog();
+    goToSleep();
+    return;
+  }
+
+  if (buttonMode == BUTTON_HOLD_OTA) {
+    runButtonOtaMode();
 
     if (DEBUG_MODE) {
       stopAwakeWatchdog();
@@ -506,12 +566,11 @@ void connectWiFi() {
 // session, and the device restarts into normal operation. If it times out
 // or is cancelled, this returns and the caller goes back to sleep with
 // whatever settings already existed (unchanged).
-void runMaintenanceMode(bool forced) {
-  Serial.println(forced
-    ? "Setup button held -- entering maintenance mode."
+void runMaintenanceMode(bool viaButton) {
+  Serial.println(viaButton
+    ? "Setup button held >10s -- entering maintenance mode."
     : "No saved WiFi config yet -- entering first-time setup.");
   startAwakeWatchdog((PORTAL_TIMEOUT_SEC + 60) * 1000UL + OTA_WINDOW_MS);
-  ledcWrite(LED_PIN, ((uint32_t)LED_BRIGHTNESS_PCT * LED_PWM_MAX_DUTY) / 100); // solid = maintenance mode
 
   char mqttPortStr[6];
   snprintf(mqttPortStr, sizeof(mqttPortStr), "%u", settings.mqttPort);
@@ -556,8 +615,26 @@ void runMaintenanceMode(bool forced) {
   // completely different project, costing a real ~60s connect-timeout wait
   // before falling back to the portal, for a "saved" network we never
   // actually saved.
+  // Non-blocking so the LED can blink for the duration of the portal
+  // instead of sitting solid -- WiFiManager hands control back to us via
+  // process(), rather than blocking inside startConfigPortal() itself.
   String apName = "TempSensorV4-" + getShortChipId();
-  bool connected = wm.startConfigPortal(apName.c_str(), apPassword);
+  wm.setConfigPortalBlocking(false);
+  wm.startConfigPortal(apName.c_str(), apPassword);
+
+  unsigned long lastBlink = 0;
+  bool ledOn = false;
+  while (wm.getConfigPortalActive() && WiFi.status() != WL_CONNECTED) {
+    wm.process();
+    unsigned long now = millis();
+    if (now - lastBlink >= SETUP_LED_BLINK_MS) {
+      lastBlink = now;
+      ledOn = !ledOn;
+      ledcWrite(LED_PIN, ledOn ? ((uint32_t)LED_BRIGHTNESS_PCT * LED_PWM_MAX_DUTY) / 100 : 0);
+    }
+    delay(10);
+  }
+  bool connected = (WiFi.status() == WL_CONNECTED);
 
   if (!connected) {
     Serial.println("Setup portal timed out / no connection -- resuming normal cycle with existing settings.");
@@ -592,6 +669,7 @@ void runMaintenanceMode(bool forced) {
   ArduinoOTA.setHostname(settings.deviceId.c_str());
   ArduinoOTA.setPassword(OTA_PASSWORD);
   ArduinoOTA.begin();
+  ledcWrite(LED_PIN, ((uint32_t)LED_BRIGHTNESS_PCT * LED_PWM_MAX_DUTY) / 100); // solid = OTA window active
   unsigned long otaStart = millis();
   while (millis() - otaStart < OTA_WINDOW_MS) {
     ArduinoOTA.handle();
@@ -605,6 +683,22 @@ void runMaintenanceMode(bool forced) {
   Serial.flush();
   delay(200);
   ESP.restart();
+}
+
+// Setup button held 2-10s: a normal ArduinoOTA window, no portal --
+// connects with the already-saved WiFi credentials. Unreachable on an
+// unconfigured device (see forceSetup in setup()), since there'd be
+// nothing to connect with. LED solid on for the duration, same as the
+// remote-MQTT-triggered path in enterOtaMode().
+void runButtonOtaMode() {
+  Serial.println("Setup button held 2-10s -- entering OTA-only mode (no portal).");
+  connectWiFi();
+  if (WiFi.status() == WL_CONNECTED) {
+    enterOtaMode();
+  } else {
+    Serial.println("OTA button held but WiFi failed to connect -- going back to sleep.");
+    blink(3, 20, 200);
+  }
 }
 
 // ---------------- MQTT ----------------
