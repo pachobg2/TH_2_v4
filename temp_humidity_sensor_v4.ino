@@ -77,6 +77,7 @@
 #include "esp32-hal-bt.h"
 #include <time.h>
 #include <sys/time.h>
+#include <vector>
 #include "config.h"
 
 // Defined up here, right after the includes, rather than down by the
@@ -590,6 +591,17 @@ void runMaintenanceMode(bool viaButton) {
   WiFiManagerParameter p_mqtt_pass("mqtt_pass", "MQTT password", settings.mqttPassword.c_str(), 32, "type='password'");
   WiFiManagerParameter p_device_name("device_name", "Device name (shown in Home Assistant)", settings.deviceName.c_str(), 40);
   WiFiManagerParameter p_device_id("device_id", "Device ID (MQTT topics, no spaces)", settings.deviceId.c_str(), 32);
+  // Checkbox via WiFiManager's custom-attribute trick (it has no native
+  // checkbox type): submitted as "1" when checked, absent entirely
+  // (getValue() == "") when not. A real factory reset -- wipes this
+  // project's own saved settings AND the ESP32 radio's own persisted WiFi
+  // credentials -- unlike the portal's built-in "Erase" menu button, which
+  // only clears the radio's WiFi credentials and leaves our settings
+  // (including whatever's in the fields above) untouched. That default
+  // button is hidden below (see setMenu()) to avoid the two being confused
+  // for each other.
+  WiFiManagerParameter p_factory_reset("factory_reset",
+    "Factory reset (erase ALL saved settings, including WiFi)", "1", 2, "type=\"checkbox\"");
 
   WiFiManager wm;
   wm.addParameter(&p_mqtt_host);
@@ -598,7 +610,13 @@ void runMaintenanceMode(bool viaButton) {
   wm.addParameter(&p_mqtt_pass);
   wm.addParameter(&p_device_name);
   wm.addParameter(&p_device_id);
+  wm.addParameter(&p_factory_reset);
   wm.setConfigPortalTimeout(PORTAL_TIMEOUT_SEC);
+  // Hide the built-in "Erase" menu button -- it only clears the radio's own
+  // WiFi credentials, not our settings, which reads as a half-working
+  // factory reset. Use the checkbox above instead for an actual full reset.
+  std::vector<const char*> menu = {"wifi", "param", "info", "sep", "restart", "exit"};
+  wm.setMenu(menu);
 
   // WPA2 requires an 8-63 character password -- anything shorter and
   // WiFi.softAP() fails to bring the AP up at all (no visible error, it
@@ -653,6 +671,23 @@ void runMaintenanceMode(bool viaButton) {
     return;
   }
 
+  // Checked regardless of what else was filled in -- a factory reset
+  // request takes priority over a normal save.
+  if (strcmp(p_factory_reset.getValue(), "1") == 0) {
+    Serial.println("Factory reset requested from setup portal -- wiping saved settings and WiFi credentials.");
+    settingsPrefs.begin("settings", false);
+    settingsPrefs.clear();
+    settingsPrefs.end();
+    WiFi.disconnect(true, true); // also erase the radio's own persisted WiFi credentials
+    blink(5, 50, 100);
+    ledcWrite(LED_PIN, 0);
+    stopAwakeWatchdog();
+    Serial.println("Restarting into unconfigured state...");
+    Serial.flush();
+    delay(200);
+    ESP.restart();
+  }
+
   settings.mqttHost     = p_mqtt_host.getValue();
   int parsedPort        = atoi(p_mqtt_port.getValue());
   settings.mqttPort     = (parsedPort > 0 && parsedPort <= 65535) ? (uint16_t)parsedPort : 1883;
@@ -667,6 +702,22 @@ void runMaintenanceMode(bool viaButton) {
   // re-parsing the portal's own internal state.
   settings.wifiSsid     = WiFi.SSID();
   settings.wifiPassword = WiFi.psk();
+
+  // WiFi connected fine, but an empty MQTT host means this device could
+  // never actually publish anything -- don't mark it "configured" on a
+  // submission like that, or it silently gets stuck: nothing works, and
+  // nothing prompts you back into the portal short of holding the button
+  // for another 10s. Leaving `configured` false means the next boot goes
+  // straight back to setup on its own, no button needed.
+  if (settings.mqttHost.length() == 0) {
+    saveSettings(); // still keep the WiFi/device fields that were filled in
+    Serial.println("Setup portal closed with an empty MQTT broker host -- not marking as configured.");
+    ledcWrite(LED_PIN, 0);
+    blink(5, 20, 100); // distinct from the 3-blink connect-failure pattern
+    stopAwakeWatchdog();
+    return;
+  }
+
   settings.configured   = true;
   saveSettings();
   Serial.printf("Setup saved: device_id=%s mqtt=%s:%u\n",
