@@ -699,6 +699,14 @@ void runMaintenanceMode(bool viaButton) {
   // (see the button hold below).
   std::vector<const char*> menu = {"wifi", "info", "sep", "restart", "exit"};
   wm.setMenu(menu);
+  // Already the library default (true) -- set explicitly so it doesn't
+  // depend on that default across versions. This only affects whether the
+  // firmware answers OS captive-portal probe requests correctly; it can't
+  // force a phone's browser to actually auto-open. If that doesn't happen
+  // (common on a phone that's already connected to this exact AP name --
+  // same every boot, from the chip ID -- and cached "no portal here" from
+  // an earlier visit), browsing to 192.168.4.1 manually always works.
+  wm.setCaptivePortalEnable(true);
 
   // WPA2 requires an 8-63 character password -- anything shorter and
   // WiFi.softAP() fails to bring the AP up at all (no visible error, it
