@@ -497,13 +497,14 @@ void connectWiFi() {
 
 // Entered when the setup button is held at boot, or when this device has
 // never been configured yet (settings.configured == false). Broadcasts
-// "TempSensorV4-XXXXXX", scans for nearby networks, and serves a page
-// (WiFiManager) with a WiFi picker plus custom fields for MQTT and device
-// identity. If the portal succeeds (or, when not forced, if it manages to
-// silently reconnect with already-saved credentials), settings are saved,
-// a normal ArduinoOTA window is opened so you can push new firmware in the
-// same session, and the device restarts into normal operation. If it times
-// out or is cancelled, this returns and the caller goes back to sleep with
+// "TempSensorV4-XXXXXX" immediately (no attempt to reconnect with any
+// existing WiFi credentials first -- see the comment above the
+// startConfigPortal() call for why), scans for nearby networks, and serves
+// a page (WiFiManager) with a WiFi picker plus custom fields for MQTT and
+// device identity. If the portal succeeds, settings are saved, a normal
+// ArduinoOTA window is opened so you can push new firmware in the same
+// session, and the device restarts into normal operation. If it times out
+// or is cancelled, this returns and the caller goes back to sleep with
 // whatever settings already existed (unchanged).
 void runMaintenanceMode(bool forced) {
   Serial.println(forced
@@ -544,10 +545,19 @@ void runMaintenanceMode(bool forced) {
     apPassword = nullptr; // WiFiManager treats null as "open network, no password"
   }
 
+  // Always startConfigPortal(), never autoConnect(): this function is only
+  // ever reached when settings.configured is false (i.e. our own app-level
+  // setup has never completed) or the button was held. Either way there's
+  // no known-good config worth trying first -- autoConnect()'s "try the
+  // radio's own last-saved network" step doesn't read from our settings at
+  // all, it reads whatever the ESP32 WiFi driver itself last connected to
+  // (persisted independently, chip-wide, by any firmware ever flashed to
+  // this board). On a reused dev board that's often a stale network from a
+  // completely different project, costing a real ~60s connect-timeout wait
+  // before falling back to the portal, for a "saved" network we never
+  // actually saved.
   String apName = "TempSensorV4-" + getShortChipId();
-  bool connected = forced
-    ? wm.startConfigPortal(apName.c_str(), apPassword)
-    : wm.autoConnect(apName.c_str(), apPassword);
+  bool connected = wm.startConfigPortal(apName.c_str(), apPassword);
 
   if (!connected) {
     Serial.println("Setup portal timed out / no connection -- resuming normal cycle with existing settings.");
