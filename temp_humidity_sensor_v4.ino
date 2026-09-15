@@ -49,6 +49,10 @@
  *     Brightness" number entity, 0-100%), not just a fixed config.h value
  *     -- persisted in NVS (settings.ledBrightnessPct), applied on the next
  *     wake after a change, same latency as the remote OTA-request switch.
+ *   - The portal's built-in "Info" page (generic ESP32 chip/heap/uptime
+ *     diagnostics) is hidden; a "Device status" section on the "Configure
+ *     WiFi" page shows a live temp/humidity/battery reading (taken right
+ *     as the portal opens) plus last-known WiFi/MQTT connectivity instead.
  *
  * Everything else -- sensor read, battery curve, boot/fail counters,
  * last-full-charge tracking, HA discovery, deep sleep -- is unchanged from
@@ -114,6 +118,15 @@ struct Settings {
 
 Settings settings;
 Preferences settingsPrefs;
+
+// Declared up here for the same reason as ButtonHoldMode above -- used as
+// a function return type, so it has to be visible before Arduino's
+// auto-generated prototypes are inserted near the top of the file.
+struct SensorReading {
+  float tempC;
+  float humidity;
+  bool ok;
+};
 
 String getShortChipId() {
   uint64_t mac = ESP.getEfuseMac();
@@ -345,6 +358,7 @@ bool publishWithAck(const char* topic, const char* payload, bool retained);
 void sendDiscoveryConfig();
 int publishState(float tempC, float humidity, float battV, float battPct, int rssi, const String& resetReasonStr, uint32_t failCount);
 void goToSleep();
+SensorReading readSensor();
 float readBatteryVoltage();
 float batteryPercentage(float v);
 uint32_t ledDutyForBrightness();
@@ -438,21 +452,9 @@ void setup() {
 
   buildTopics();
 
-  // Power on SHTC3 and let it settle
-  digitalWrite(SENSOR_POWER_PIN, HIGH);
-  delay(SENSOR_POWER_SETTLE_MS);
-
-  Wire.begin(SDA_PIN, SCL_PIN);
-  bool shtOk = shtc3.begin(&Wire);
-  float tempC = NAN, humidity = NAN;
-  if (shtOk) {
-    sensors_event_t humEvent, tempEvent;
-    shtc3.getEvent(&humEvent, &tempEvent);
-    tempC = tempEvent.temperature + TEMP_OFFSET_C;
-    humidity = humEvent.relative_humidity;
-  } else {
-    Serial.println("SHTC3 not found on I2C bus!");
-  }
+  SensorReading reading = readSensor();
+  float tempC = reading.tempC;
+  float humidity = reading.humidity;
 
   float battV = readBatteryVoltage();
   float battPct = batteryPercentage(battV);
@@ -634,6 +636,34 @@ void runMaintenanceMode(bool viaButton) {
     : "No saved WiFi config yet -- entering first-time setup.");
   startAwakeWatchdog((PORTAL_TIMEOUT_SEC + 60) * 1000UL);
 
+  // Snapshot of current readings plus last-known connectivity, shown as a
+  // read-only section on the portal page -- replaces the portal's default
+  // "Info" menu page (generic ESP32 chip/heap/uptime trivia, hidden below)
+  // with something actually about this sensor. Taken once, right now, not
+  // a live dashboard -- the page doesn't refresh itself while it's open.
+  SensorReading statusReading = readSensor();
+  digitalWrite(SENSOR_POWER_PIN, LOW); // no further use for it this boot -- unlike the normal cycle, which leaves it on
+  float statusBattV = readBatteryVoltage();
+  float statusBattPct = batteryPercentage(statusBattV);
+  String tempStr = isnan(statusReading.tempC) ? "sensor error" : String(statusReading.tempC, 1) + " &deg;C";
+  String humStr  = isnan(statusReading.humidity) ? "sensor error" : String(statusReading.humidity, 0) + "%";
+  String wifiStatusStr = settings.configured
+    ? (settings.wifiSsid.length() ? ("last connected: " + settings.wifiSsid) : String("no WiFi saved yet"))
+    : String("not yet configured");
+  String mqttStatusStr = (settings.configured && settings.mqttHost.length())
+    ? (settings.mqttHost + ":" + String(settings.mqttPort))
+    : String("not yet configured");
+  String statusHtml = String("<div style='background:#f4f4f4;border-radius:6px;padding:10px;margin:10px 0;font-size:0.9em;'>")
+    + "<strong>Device status</strong> (just read)<br>"
+    + "Temperature: " + tempStr + " &middot; Humidity: " + humStr + "<br>"
+    + "Battery: " + String(statusBattV, 2) + "V (" + String(statusBattPct, 0) + "%)<br>"
+    + "WiFi: " + wifiStatusStr + "<br>"
+    + "MQTT broker: " + mqttStatusStr + "<br>"
+    + "Boot count: " + String(bootCount) + " &middot; connect fails: " + String(connectFailCount)
+    + " today / " + String(totalFailCount) + " total"
+    + "</div>";
+  WiFiManagerParameter p_status(statusHtml.c_str());
+
   char mqttPortStr[6];
   snprintf(mqttPortStr, sizeof(mqttPortStr), "%u", settings.mqttPort);
 
@@ -673,6 +703,7 @@ void runMaintenanceMode(bool viaButton) {
                           + " Sensor\\A Firmware v" + String(FIRMWARE_VERSION)
                           + "';white-space:pre-line;display:block;text-align:center;color:#888;margin:4px 0;}</style>";
   wm.setCustomHeadElement(versionHeader.c_str());
+  wm.addParameter(&p_status);
   wm.addParameter(&p_mqtt_heading);
   wm.addParameter(&p_mqtt_host);
   wm.addParameter(&p_mqtt_port);
@@ -696,8 +727,12 @@ void runMaintenanceMode(bool viaButton) {
   // Also hides the built-in "Erase" menu button -- it only clears the
   // radio's own WiFi credentials, not our settings, which reads as a
   // half-working factory reset and could be mistaken for the real one
-  // (see the button hold below).
-  std::vector<const char*> menu = {"wifi", "info", "sep", "restart", "exit"};
+  // (see the button hold below) -- and the built-in "Info" page, generic
+  // ESP32 chip/heap/uptime diagnostics that aren't relevant here. Its
+  // replacement (the sensor/WiFi/MQTT status block above) lives on the
+  // "Configure WiFi" page instead, since WiFiManager has no public API to
+  // customize Info page content itself, only to hide its optional buttons.
+  std::vector<const char*> menu = {"wifi", "sep", "restart", "exit"};
   wm.setMenu(menu);
   // Already the library default (true) -- set explicitly so it doesn't
   // depend on that default across versions. This only affects whether the
@@ -1184,6 +1219,31 @@ int publishState(float tempC, float humidity, float battV, float battPct, int rs
                 tempC, humidity, battV, battPct, batteryLow ? "yes" : "no", rssi, lastUpdate.c_str(), resetReasonStr.c_str(), (unsigned long)failCount, FIRMWARE_VERSION, failed);
 
   return failed;
+}
+
+// ---------------- Sensor ----------------
+
+// Powers on the SHTC3, lets it settle, and takes one reading. Leaves the
+// sensor powered afterward -- matches the normal report cycle, which
+// keeps it on through the rest of setup() rather than powering down right
+// after reading. A caller that has no further use for it this boot (the
+// setup-portal status snapshot) turns SENSOR_POWER_PIN back off itself.
+SensorReading readSensor() {
+  digitalWrite(SENSOR_POWER_PIN, HIGH);
+  delay(SENSOR_POWER_SETTLE_MS);
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+  bool shtOk = shtc3.begin(&Wire);
+  SensorReading r = { NAN, NAN, shtOk };
+  if (shtOk) {
+    sensors_event_t humEvent, tempEvent;
+    shtc3.getEvent(&humEvent, &tempEvent);
+    r.tempC = tempEvent.temperature + TEMP_OFFSET_C;
+    r.humidity = humEvent.relative_humidity;
+  } else {
+    Serial.println("SHTC3 not found on I2C bus!");
+  }
+  return r;
 }
 
 // ---------------- Battery ----------------
