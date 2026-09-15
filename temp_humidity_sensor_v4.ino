@@ -50,9 +50,12 @@
  *     -- persisted in NVS (settings.ledBrightnessPct), applied on the next
  *     wake after a change, same latency as the remote OTA-request switch.
  *   - The portal's built-in "Info" page (generic ESP32 chip/heap/uptime
- *     diagnostics) is hidden; a "Device status" section on the "Configure
- *     WiFi" page shows a live temp/humidity/battery reading (taken right
- *     as the portal opens) plus last-known WiFi/MQTT connectivity instead.
+ *     diagnostics) is hidden; a "Device status" section at the bottom of
+ *     the landing menu page shows a live temp/humidity/battery reading
+ *     (taken right as the portal opens) plus last-known WiFi/MQTT
+ *     connectivity instead. The "Configure WiFi" button is relabeled to
+ *     just "Configure" (CSS text swap -- WiFiManager has no button-label
+ *     API), since that page covers both WiFi and MQTT/device settings.
  *
  * Everything else -- sensor read, battery curve, boot/fail counters,
  * last-full-charge tracking, HA discovery, deep sleep -- is unchanged from
@@ -662,7 +665,11 @@ void runMaintenanceMode(bool viaButton) {
     + "Boot count: " + String(bootCount) + " &middot; connect fails: " + String(connectFailCount)
     + " today / " + String(totalFailCount) + " total"
     + "</div>";
-  WiFiManagerParameter p_status(statusHtml.c_str());
+  // Rendered on the landing menu page (below the button list), not the
+  // "Configure WiFi" form -- via setCustomMenuHTML() + the "custom" menu
+  // token below, rather than as a WiFiManagerParameter. statusHtml has to
+  // stay alive for as long as wm does, same reasoning as versionHeader
+  // further down.
 
   char mqttPortStr[6];
   snprintf(mqttPortStr, sizeof(mqttPortStr), "%u", settings.mqttPort);
@@ -692,18 +699,26 @@ void runMaintenanceMode(bool viaButton) {
   // at without digging through Serial or Home Assistant. Two lines (brand
   // title, then firmware version) via a single CSS ::before -- "\A " is
   // the CSS escape for a literal newline in generated content, rendered
-  // as an actual line break by white-space:pre-line. setCustomBodyHeader()
-  // would be the more direct way to inject this, but it's not available
-  // in every WiFiManager release (missing on at least one version this
-  // fleet has built against), so this uses setCustomHeadElement() instead
-  // -- a much older, more consistently-available API. versionHeader has
-  // to stay alive for as long as wm does (WiFiManager stores the pointer,
+  // as an actual line break by white-space:pre-line. Also relabels the
+  // "Configure WiFi" button to just "Configure": WiFiManager has no public
+  // API to rename menu button text (it's a fixed string per the library's
+  // own language file), so this hides the button's real text and injects
+  // replacement text via ::after instead -- targets the button by its
+  // parent form's action='/wifi', confirmed against the library's actual
+  // markup (`<form action='/wifi'><button>Configure WiFi</button></form>`)
+  // rather than guessed. setCustomBodyHeader() would be the more direct
+  // way to inject the version-header part, but it's not available in
+  // every WiFiManager release (missing on at least one version this fleet
+  // has built against), so this uses setCustomHeadElement() instead -- a
+  // much older, more consistently-available API. versionHeader has to
+  // stay alive for as long as wm does (WiFiManager stores the pointer,
   // not a copy), so it's a local here rather than a temporary.
   String versionHeader = "<style>body::before{content:'" + String(DEVICE_MANUFACTURER) + " " + String(DEVICE_MODEL)
                           + " Sensor\\A Firmware v" + String(FIRMWARE_VERSION)
-                          + "';white-space:pre-line;display:block;text-align:center;color:#888;margin:4px 0;}</style>";
+                          + "';white-space:pre-line;display:block;text-align:center;color:#888;margin:4px 0;}"
+                          + "form[action='/wifi'] button{font-size:0;}"
+                          + "form[action='/wifi'] button::after{content:'Configure';font-size:1rem;}</style>";
   wm.setCustomHeadElement(versionHeader.c_str());
-  wm.addParameter(&p_status);
   wm.addParameter(&p_mqtt_heading);
   wm.addParameter(&p_mqtt_host);
   wm.addParameter(&p_mqtt_port);
@@ -724,16 +739,18 @@ void runMaintenanceMode(bool viaButton) {
   // from the line below, which had been overriding that default and
   // splitting them after all.
   //
+  // The "custom" token renders _customMenuHTML (set below) at this exact
+  // position in the landing menu page -- placed last, so the status box
+  // shows up below the button list, not woven into the WiFi/MQTT form.
+  //
   // Also hides the built-in "Erase" menu button -- it only clears the
   // radio's own WiFi credentials, not our settings, which reads as a
   // half-working factory reset and could be mistaken for the real one
   // (see the button hold below) -- and the built-in "Info" page, generic
-  // ESP32 chip/heap/uptime diagnostics that aren't relevant here. Its
-  // replacement (the sensor/WiFi/MQTT status block above) lives on the
-  // "Configure WiFi" page instead, since WiFiManager has no public API to
-  // customize Info page content itself, only to hide its optional buttons.
-  std::vector<const char*> menu = {"wifi", "sep", "restart", "exit"};
+  // ESP32 chip/heap/uptime diagnostics that aren't relevant here.
+  std::vector<const char*> menu = {"wifi", "sep", "restart", "exit", "custom"};
   wm.setMenu(menu);
+  wm.setCustomMenuHTML(statusHtml.c_str());
   // Already the library default (true) -- set explicitly so it doesn't
   // depend on that default across versions. This only affects whether the
   // firmware answers OS captive-portal probe requests correctly; it can't

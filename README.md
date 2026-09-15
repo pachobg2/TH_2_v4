@@ -53,24 +53,25 @@ for the OTA-only path to use.
    a second for as long as the portal is open.
 2. Connect to that network from your phone or laptop. A captive-portal
    landing page should open automatically (or browse to `192.168.4.1`),
-   showing a short menu — **only one button matters here: "Configure
-   WiFi"**. The top of every portal page — including this landing one —
-   shows the device brand and model (e.g. "P@cho TH-2 Sensor") and the
-   firmware version below it, so you can tell which unit and which build
-   you're looking at without checking Serial or Home Assistant.
-3. Tap **"Configure WiFi"**. This is the *only* page you need: pick your
-   WiFi network from the scanned list (or enter one manually). Below the
-   WiFi fields is a **"Device status"** box — a live temperature/humidity/
-   battery reading taken right as the portal opened, plus the last-known
-   WiFi network and MQTT broker if this unit's been configured before (see
-   [Device status](#device-status) below). Keep scrolling past that — a
-   "MQTT & device settings" heading marks where the same form continues:
-   broker host/port/username/password and a device name. Device ID
-   defaults to an auto-generated `th4_XXXXXX` (stable, collision-free out
-   of the box) — override it here if you want a memorable topic name
-   instead. **MQTT broker host is a required field** — the browser won't
-   let you submit the form with it blank, so there's no way to save the
-   WiFi half only by mistake.
+   showing a short menu — **only one button matters here: "Configure"**.
+   Below the button list on this same landing page is a **"Device
+   status"** box — a live temperature/humidity/battery reading taken right
+   as the portal opened, plus the last-known WiFi network and MQTT broker
+   if this unit's been configured before (see [Device
+   status](#device-status) below). The top of every portal page —
+   including this landing one — shows the device brand and model (e.g.
+   "P@cho TH-2 Sensor") and the firmware version below it, so you can tell
+   which unit and which build you're looking at without checking Serial or
+   Home Assistant.
+3. Tap **"Configure"**. This is the *only* page you need: pick your WiFi
+   network from the scanned list (or enter one manually), then **keep
+   scrolling** — a "MQTT & device settings" heading marks where the same
+   form continues below the WiFi fields: broker host/port/username/
+   password and a device name. Device ID defaults to an auto-generated
+   `th4_XXXXXX` (stable, collision-free out of the box) — override it here
+   if you want a memorable topic name instead. **MQTT broker host is a
+   required field** — the browser won't let you submit the form with it
+   blank, so there's no way to save the WiFi half only by mistake.
 4. Save (once, for the whole form). The device connects, stores
    everything to flash, and restarts straight into normal operation. To
    also push new firmware in the same visit, hold the button 2-10s on the
@@ -85,8 +86,10 @@ its current settings.
 
 The portal's built-in "Info" page (generic ESP32 chip model, free heap,
 uptime — none of it specific to this device) is hidden. In its place, the
-"Configure WiFi" page has a **"Device status"** box between the WiFi
-fields and the MQTT section:
+landing menu page has a **"Device status"** box below the button list
+(via `setCustomMenuHTML()` and a `"custom"` menu-position token — the
+supported way to add content to that page, rather than the "Configure"
+form itself):
 
 - **Temperature / humidity / battery** — a real reading, taken by
   powering on the SHTC3 right as the portal opens (same sensor, same code
@@ -107,7 +110,7 @@ wipes both this device's saved settings and the ESP32 radio's own
 persisted WiFi credentials, then restarts into a fully unconfigured
 state, equivalent to a fresh, never-set-up unit.
 
-This used to be a checkbox on the Configure WiFi page instead; it's a
+This used to be a checkbox on the Configure page instead; it's a
 button-hold now because the checkbox never reliably worked (see v4.2.0b
 through v4.2.4b) — WiFiManager's custom-attribute mechanism for adding a
 checkbox ends up emitting a duplicate HTML `value` attribute on the input,
@@ -236,3 +239,4 @@ numbering.
 | v4.4.3b | 2026-09-14 | Actually fixed the two-page setup portal this time: WiFiManager's own docs warn that `setParamsPage()` and a custom `setMenu()` "should not be combined" -- our `setMenu()` list included `"param"` as its own menu entry (a leftover from before the factory reset checkbox was replaced by a button hold), which was overriding the library's default of rendering `addParameter()` fields directly on the "Configure WiFi" page. Removed `"param"` from the menu; the WiFi picker and MQTT/device fields are now genuinely one page, one form, one Save -- confirmed this was the real root cause, not a scrolling/visibility issue. |
 | v4.4.4b | 2026-09-14 | Explicitly called `wm.setCaptivePortalEnable(true)` (already the library default, but now not relying on that default across versions) after a report of the captive-portal page not auto-opening on connecting to the AP. Confirmed via WiFiManager's own source that the DNS redirect responsible for that starts immediately in `startConfigPortal()` and is serviced frequently enough by our ~10ms portal loop either way -- the far more likely explanation is OS-side captive-portal-result caching for this exact AP name (same every boot, derived from the chip ID), not a firmware bug. Browsing to `192.168.4.1` manually always works regardless. Also: `FIRMWARE_VERSION` reset to `4.4.4b`, retracting the premature "stable" declaration at v4.4.1b. |
 | v4.5.0b | 2026-09-15 | Replaced the portal's built-in "Info" page (generic ESP32 chip/heap/uptime diagnostics -- no public WiFiManager API to customize its content, only to hide its optional buttons) with a "Device status" section on the "Configure WiFi" page: a live temperature/humidity/battery reading taken as the portal opens (extracted the sensor read into a shared `readSensor()` helper, also used by the normal report cycle), plus last-known WiFi network and MQTT broker, plus boot/connect-fail counters. Snapshot only, not a live-updating dashboard. |
+| v4.6.0b | 2026-09-15 | Two portal changes: (1) moved the "Device status" box off the "Configure WiFi" form and onto the landing menu page instead, below the button list -- via `setCustomMenuHTML()` and a `"custom"` menu-position token, the actual supported mechanism for this rather than a `WiFiManagerParameter`. (2) Relabeled the "Configure WiFi" button to just "Configure" (it covers WiFi and MQTT/device settings together, so the old label undersold it) -- WiFiManager has no button-label API, so this hides the button's real text via CSS and injects replacement text with `::after`, targeting it by its parent form's `action='/wifi'` (confirmed against the library's actual generated markup, not guessed). |
