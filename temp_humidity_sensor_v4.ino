@@ -33,7 +33,7 @@
  *     at all. Held 2-10s opens a button-triggered OTA-only window (no
  *     portal, LED solid on) -- same idea as the remote MQTT "OTA Request"
  *     switch, just triggered locally. Held past 10s opens the full setup
- *     portal (LED blinking once a second) -- once it succeeds, settings
+ *     portal (LED pulsing briefly every half second) -- once it succeeds, settings
  *     are saved and it restarts straight into normal operation (hold
  *     2-10s on the next boot too if you also want to push firmware). An
  *     unconfigured device always goes straight to the portal regardless
@@ -60,6 +60,12 @@
  *     means "add 0.15V", not "the battery is at 0.15V". Same persistent-
  *     value/next-wake-latency pattern as LED brightness above, not the
  *     one-shot OTA-request pattern.
+ *   - Two new diagnostics in HA: "IP Address" (WiFi.localIP(), published
+ *     each cycle like RSSI) and "Uptime" in days, based on UTC wall-clock
+ *     time via a persisted first-boot timestamp (NVS, "device" namespace)
+ *     rather than millis()/the deep-sleep RTC timer, neither of which
+ *     survives across sleep cycles the way this needs -- see
+ *     getUptimeDays().
  *   - The portal's built-in "Info" page (generic ESP32 chip/heap/uptime
  *     diagnostics) is hidden; a lime-green "P@cho" logo (inline SVG) plus
  *     a "Device status" section at the top of the landing menu page show
@@ -285,12 +291,14 @@ String TOPIC_TEMP, TOPIC_HUMIDITY, TOPIC_BATTERY_V, TOPIC_BATTERY_PCT, TOPIC_RSS
        TOPIC_LAST_UPDATE, TOPIC_RESET_REASON, TOPIC_FAIL_COUNT, TOPIC_TOTAL_FAIL_COUNT,
        TOPIC_OTA_REQUEST, TOPIC_BATTERY_LOW, TOPIC_BOOT_COUNT, TOPIC_FW_VERSION,
        TOPIC_LAST_FULL_CHARGE, TOPIC_LED_BRIGHTNESS, TOPIC_LED_BRIGHTNESS_SET,
-       TOPIC_BATTERY_V_RAW, TOPIC_BATTERY_CAL_OFFSET, TOPIC_BATTERY_CAL_OFFSET_SET;
+       TOPIC_BATTERY_V_RAW, TOPIC_BATTERY_CAL_OFFSET, TOPIC_BATTERY_CAL_OFFSET_SET,
+       TOPIC_IP_ADDRESS, TOPIC_UPTIME_DAYS;
 String DISCOVERY_TEMP, DISCOVERY_HUMIDITY, DISCOVERY_BATTERY_V, DISCOVERY_BATTERY_PCT,
        DISCOVERY_RSSI, DISCOVERY_LAST_UPDATE, DISCOVERY_RESET_REASON, DISCOVERY_FAIL_COUNT,
        DISCOVERY_TOTAL_FAIL_COUNT, DISCOVERY_OTA_REQUEST, DISCOVERY_BATTERY_LOW,
        DISCOVERY_BOOT_COUNT, DISCOVERY_FW_VERSION, DISCOVERY_LAST_FULL_CHARGE,
-       DISCOVERY_LED_BRIGHTNESS, DISCOVERY_BATTERY_V_RAW, DISCOVERY_BATTERY_CAL_OFFSET;
+       DISCOVERY_LED_BRIGHTNESS, DISCOVERY_BATTERY_V_RAW, DISCOVERY_BATTERY_CAL_OFFSET,
+       DISCOVERY_IP_ADDRESS, DISCOVERY_UPTIME_DAYS;
 
 void buildTopics() {
   String base = String("home/") + settings.deviceId;
@@ -313,6 +321,8 @@ void buildTopics() {
   TOPIC_BATTERY_V_RAW        = base + "/battery_voltage_raw"; // pre-calibration, for comparing against a multimeter
   TOPIC_BATTERY_CAL_OFFSET     = base + "/battery_cal_offset";
   TOPIC_BATTERY_CAL_OFFSET_SET = base + "/battery_cal_offset/set";
+  TOPIC_IP_ADDRESS   = base + "/ip_address";
+  TOPIC_UPTIME_DAYS  = base + "/uptime_days";
 
   String sbase = String("homeassistant/sensor/") + settings.deviceId;
   DISCOVERY_TEMP             = sbase + "/temperature/config";
@@ -332,6 +342,8 @@ void buildTopics() {
   DISCOVERY_LED_BRIGHTNESS   = String("homeassistant/number/") + settings.deviceId + "/led_brightness/config";
   DISCOVERY_BATTERY_V_RAW      = sbase + "/battery_voltage_raw/config";
   DISCOVERY_BATTERY_CAL_OFFSET = String("homeassistant/number/") + settings.deviceId + "/battery_cal_offset/config";
+  DISCOVERY_IP_ADDRESS  = sbase + "/ip_address/config";
+  DISCOVERY_UPTIME_DAYS = sbase + "/uptime_days/config";
 }
 
 // ---------------- Persisted state (survives deep sleep) ----------------
@@ -348,6 +360,7 @@ RTC_DATA_ATTR bool g_timeSynced = false; // true once any cycle has completed a 
 espMqttClient mqttClient;
 Adafruit_SHTC3 shtc3 = Adafruit_SHTC3();
 Preferences batteryPrefs; // flash/NVS, not RTC memory -- survives an actual battery depletion
+Preferences devicePrefs; // flash/NVS -- just the first-ever-boot timestamp, for uptime tracking
 
 // Tracks the PUBACK for whichever single publish is currently in flight.
 // publishWithAck() only ever has one outstanding packet at a time, so a
@@ -502,6 +515,7 @@ bool syncTimeUtc();
 String getCurrentTimestampUtc();
 String resetReasonToString(esp_reset_reason_t reason);
 String updateAndGetLastFullChargeDate(float batteryPercent);
+int getUptimeDays();
 
 // ---------------- Setup / main flow ----------------
 
@@ -1089,7 +1103,6 @@ void runMaintenanceMode(bool viaButton) {
   wm.setConfigPortalBlocking(false);
   wm.startConfigPortal(apName.c_str(), apPassword);
 
-  unsigned long lastBlink = 0;
   bool ledOn = false;
   // Holding the setup button again for FACTORY_RESET_HOLD_MS while the
   // portal is open wipes this device's saved settings and the ESP32
@@ -1127,10 +1140,14 @@ void runMaintenanceMode(bool viaButton) {
       resetHoldStart = 0;
     }
 
-    unsigned long now = millis();
-    if (now - lastBlink >= SETUP_LED_BLINK_MS) {
-      lastBlink = now;
-      ledOn = !ledOn;
+    // Quick heartbeat pulse (on for SETUP_LED_PULSE_MS out of every
+    // SETUP_LED_BLINK_PERIOD_MS), not a slow 50/50 on/off blink -- a
+    // stateless phase check against millis() rather than tracking "when
+    // did I last toggle", so there's no drift and no separate timer
+    // variable to keep in sync with the period/pulse constants.
+    bool shouldBeOn = (millis() % SETUP_LED_BLINK_PERIOD_MS) < SETUP_LED_PULSE_MS;
+    if (shouldBeOn != ledOn) {
+      ledOn = shouldBeOn;
       ledcWrite(LED_PIN, ledOn ? ledDutyForBrightness() : 0);
     }
     delay(10);
@@ -1409,6 +1426,31 @@ void sendDiscoveryConfig() {
     + devBlock + "}";
   publishWithAck(DISCOVERY_RSSI.c_str(), rssiPayload.c_str(), true);
 
+  String ipAddressPayload = String("{")
+    + "\"name\":\"" + settings.deviceName + " IP Address\","
+    + "\"unique_id\":\"" + settings.deviceId + "_ip_address\","
+    + "\"entity_category\":\"diagnostic\","
+    + "\"icon\":\"mdi:ip-network\","
+    + "\"expire_after\":" + String(EXPIRE_AFTER_SEC) + ","
+    + "\"state_topic\":\"" + TOPIC_IP_ADDRESS + "\","
+    + devBlock + "}";
+  publishWithAck(DISCOVERY_IP_ADDRESS.c_str(), ipAddressPayload.c_str(), true);
+
+  // Days since this device's first-ever boot (or since the last factory
+  // reset) -- see getUptimeDays()'s own comment for why this is wall-
+  // clock-based rather than a millis()/deep-sleep-timer uptime counter.
+  String uptimeDaysPayload = String("{")
+    + "\"name\":\"" + settings.deviceName + " Uptime\","
+    + "\"unique_id\":\"" + settings.deviceId + "_uptime_days\","
+    + "\"unit_of_measurement\":\"d\","
+    + "\"state_class\":\"measurement\","
+    + "\"entity_category\":\"diagnostic\","
+    + "\"icon\":\"mdi:calendar-clock\","
+    + "\"expire_after\":" + String(EXPIRE_AFTER_SEC) + ","
+    + "\"state_topic\":\"" + TOPIC_UPTIME_DAYS + "\","
+    + devBlock + "}";
+  publishWithAck(DISCOVERY_UPTIME_DAYS.c_str(), uptimeDaysPayload.c_str(), true);
+
   String lastUpdatePayload = String("{")
     + "\"name\":\"" + settings.deviceName + " Last Update\","
     + "\"unique_id\":\"" + settings.deviceId + "_last_update\","
@@ -1573,6 +1615,14 @@ int publishState(float tempC, float humidity, float battV, float rawBattV, float
 
   snprintf(buf, sizeof(buf), "%d", rssi);
   if (!publishWithAck(TOPIC_RSSI.c_str(), buf, true)) failed++;
+
+  if (!publishWithAck(TOPIC_IP_ADDRESS.c_str(), WiFi.localIP().toString().c_str(), true)) failed++;
+
+  int uptimeDays = getUptimeDays();
+  if (uptimeDays >= 0) {
+    snprintf(buf, sizeof(buf), "%d", uptimeDays);
+    if (!publishWithAck(TOPIC_UPTIME_DAYS.c_str(), buf, true)) failed++;
+  }
 
   if (!publishWithAck(TOPIC_RESET_REASON.c_str(), resetReasonStr.c_str(), true)) failed++;
 
@@ -1803,6 +1853,32 @@ String getCurrentTimestampUtc() {
   char buf[25];
   strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
   return String(buf);
+}
+
+// Days since this device's first-ever boot (or since the last factory
+// reset, which wipes this along with everything else) -- based on UTC
+// wall-clock time, not an uptime counter. millis() and the RTC deep-sleep
+// timer both reset on every wake, so neither can track elapsed time
+// across sleep cycles the way this needs; the system clock survives
+// deep sleep (and is what backs getCurrentTimestampUtc() above), so it
+// can. Only meaningful once NTP has synced at least once; returns -1
+// until then -- a cosmetic gap on a device's very first-ever boot, same
+// reasoning as the last-full-charge date's own gap below.
+int getUptimeDays() {
+  if (!g_timeSynced) return -1;
+  time_t now = time(nullptr);
+
+  devicePrefs.begin("device", false);
+  uint32_t firstBootEpoch = devicePrefs.getUInt("firstBoot", 0);
+  if (firstBootEpoch == 0) {
+    firstBootEpoch = (uint32_t)now;
+    devicePrefs.putUInt("firstBoot", firstBootEpoch);
+  }
+  devicePrefs.end();
+
+  long elapsedSec = (long)now - (long)firstBootEpoch;
+  if (elapsedSec < 0) elapsedSec = 0; // clock stepped backwards somehow (e.g. an early bad NTP fix) -- don't report negative days
+  return (int)(elapsedSec / 86400L);
 }
 
 // Human-readable form of esp_reset_reason() — the key one to watch for is

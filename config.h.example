@@ -44,12 +44,14 @@ static const uint32_t PORTAL_TIMEOUT_SEC = 600; // 10 min
 // Setup button hold thresholds. Released before BUTTON_OTA_HOLD_MS: not a
 // deliberate hold, normal cycle. Held past that but released before
 // BUTTON_SETUP_HOLD_MS: OTA-only window (no portal), LED solid on. Held
-// past BUTTON_SETUP_HOLD_MS: full setup portal, LED blinking every
-// SETUP_LED_BLINK_MS -- committed to the instant the hold crosses that
-// mark, without waiting for release.
+// past BUTTON_SETUP_HOLD_MS: full setup portal, LED pulsing briefly every
+// SETUP_LED_BLINK_PERIOD_MS (on for SETUP_LED_PULSE_MS, off the rest --
+// a quick heartbeat blip, not a 50/50 on/off blink) -- committed to the
+// instant the hold crosses that mark, without waiting for release.
 static const uint32_t BUTTON_OTA_HOLD_MS   = 2000;  // 2s
 static const uint32_t BUTTON_SETUP_HOLD_MS = 10000; // 10s
-static const uint32_t SETUP_LED_BLINK_MS   = 1000;  // 1s
+static const uint32_t SETUP_LED_BLINK_PERIOD_MS = 500; // 0.5s between pulses
+static const uint32_t SETUP_LED_PULSE_MS        = 50;  // each pulse's on-time
 
 // While the setup portal is open, holding the button again for this long
 // wipes the device's saved settings and the ESP32 radio's own persisted

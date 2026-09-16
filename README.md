@@ -37,8 +37,9 @@ The button on `SETUP_PIN` is hold-duration sensitive:
   already-saved WiFi credentials — no portal, just a chance to push new
   firmware without walking over to a laptop. Same idea as the remote
   MQTT "OTA Request" switch, just triggered by the button instead.
-- **Held past 10s**: opens the full setup portal (LED blinking once a
-  second, `SETUP_LED_BLINK_MS`) — see below.
+- **Held past 10s**: opens the full setup portal (LED pulsing briefly
+  every half second, `SETUP_LED_BLINK_PERIOD_MS`/`SETUP_LED_PULSE_MS`) —
+  see below.
 
 **First power-on** always goes straight to the full setup portal
 regardless of hold duration, since there are no saved WiFi credentials yet
@@ -50,8 +51,8 @@ for the OTA-only path to use.
    already-configured unit): the device broadcasts its own WiFi network,
    e.g. `P@cho TH-2 XXXX` (`DEVICE_MANUFACTURER` + `DEVICE_MODEL` + the
    last 4 hex chars of the chip MAC), protected by `AP_PASSWORD` from
-   `config.h` (default `setup1234`), LED blinking once a second for as
-   long as the portal is open.
+   `config.h` (default `setup1234`), LED pulsing briefly every half
+   second for as long as the portal is open.
 2. Connect to that network from your phone or laptop. A captive-portal
    landing page should open automatically (or browse to `192.168.4.1`),
    showing a small logo, a **"Device status"** box, then a short menu —
@@ -219,9 +220,24 @@ Base topic: `home/<device_id>/...` (device ID set during setup, default
 `th4_XXXXXX`). Topic layout, HA discovery, and `expire_after` behavior are
 identical to `temp_humidity_sensor` — see that project's README for the
 full topic table, including the "Last Full Charge" diagnostic (shared
-across every battery sensor in this fleet). The only addition is that
-`<device_id>` and the "friendly name" shown in Home Assistant are both set
-through the portal instead of `config.h`.
+across every battery sensor in this fleet). `<device_id>` and the
+"friendly name" shown in Home Assistant are both set through the portal
+instead of `config.h`; the sections below cover everything else v4 adds
+on top of that shared topic table.
+
+### Diagnostics
+
+Two extra diagnostic sensors beyond what `temp_humidity_sensor` has:
+
+- **IP Address** — `WiFi.localIP()`, published every cycle alongside
+  WiFi Signal.
+- **Uptime** — in days, since this device's first-ever boot (or since
+  the last factory reset, which wipes the tracked timestamp along with
+  everything else). Based on UTC wall-clock time (persisted in NVS),
+  not a `millis()`-style counter — neither that nor the RTC deep-sleep
+  timer survives across sleep cycles the way a real "how long has this
+  been deployed" figure needs to. Not yet available (no state published)
+  until the device's first successful NTP sync.
 
 ### LED brightness
 
@@ -339,3 +355,4 @@ numbering.
 | v4.8.0b | 2026-09-16 | Moved battery voltage calibration to Home Assistant instead of editing `BATT_CAL`/`BATT_DIVIDER_RATIO` in `config.h` and reflashing: a new "Battery Voltage (Raw)" diagnostic sensor shows the pre-calibration reading, and a "Battery Calibration" number entity takes what a multimeter actually reads -- the device computes a new `settings.battDividerRatio` from the two (a proportional correction, persisted in NVS; `readBatteryVoltage()` gained an optional out-param to expose the raw value for this) on its next wake, then resets the entity back to `0`, same one-shot pattern as the remote OTA-request switch. |
 | v4.8.1b | 2026-09-17 | Fixed two real bugs reported from hardware: (1) the v4.7.0b static-IP checkbox never actually worked -- same root cause as the factory-reset checkbox saga (v4.2.0b-v4.2.4b): `WiFiManagerParameter`'s template always emits its own `value='{defaultValue}'`, so a custom `value=` attribute collides with it regardless of whether the default is empty, producing a duplicate HTML attribute. There's no way to build a working checkbox through this API at all -- removed it entirely; static IP is now chosen by filling in the "Static IP address" field itself (blank = DHCP), no separate checkbox. (2) The v4.8.0b battery calibration entity computed a multiplicative ratio from an absolute multimeter reading, which read as nonsense for a value like entering `0.15` (battery voltage became ~0.15V instead of being corrected by 0.15V). Replaced with a plain additive offset (`settings.battVoltageOffsetV`, volts, persistent like LED brightness rather than one-shot) -- entering `0.15` now means "add 0.15V", matching what was actually expected. |
 | v4.8.2b | 2026-09-17 | Added the saved WiFi network, IP config (static IP/gateway/subnet/DNS or "DHCP"), and BSSID pin to the landing page's "Device status" box, alongside the existing temp/humidity/battery/MQTT fields -- all read from `settings`, not gated on `settings.configured` the way the WiFi/MQTT lines above them are, since static IP/BSSID can be filled in on a portal visit that otherwise leaves the device unconfigured (MQTT host still blank) and are meaningful to show either way. |
+| v4.9.0b | 2026-09-17 | Two changes: (1) Added "IP Address" (published each cycle like WiFi Signal) and "Uptime" (in days) diagnostic sensors to HA. Uptime is based on UTC wall-clock time via a persisted first-boot timestamp (new "device" NVS namespace, `getUptimeDays()`), not a `millis()`/deep-sleep-timer counter -- neither survives across sleep cycles the way a real elapsed-time figure needs. (2) Changed the setup-portal LED from a slow 1s on/off blink to a quick heartbeat pulse -- on for `SETUP_LED_PULSE_MS` (50ms) out of every `SETUP_LED_BLINK_PERIOD_MS` (500ms), replacing the old `SETUP_LED_BLINK_MS` toggle-tracking logic with a stateless `millis() % period < pulse` phase check. |
