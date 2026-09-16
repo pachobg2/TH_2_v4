@@ -54,13 +54,12 @@
  *   - Battery voltage calibration is also done from Home Assistant now,
  *     instead of editing BATT_CAL in config.h and reflashing: a "Battery
  *     Voltage (Raw)" diagnostic sensor shows the pre-calibration reading
- *     to compare against a multimeter, and a "Battery Calibration"
- *     number entity takes what the multimeter actually reads -- the
- *     device computes a new settings.battDividerRatio from the two on
- *     its next wake (a simple proportional correction, same idea as
- *     BATT_DIVIDER_RATIO in config.h, just runtime-adjustable and self-
- *     computing instead of hand-edited), persists it, and resets the
- *     entity back to 0 so it doesn't reapply the same reading forever.
+ *     to compare against a multimeter, and a "Battery Calibration Offset"
+ *     number entity (settings.battVoltageOffsetV, volts, default 0) is
+ *     added straight onto every future reading -- e.g. entering 0.15
+ *     means "add 0.15V", not "the battery is at 0.15V". Same persistent-
+ *     value/next-wake-latency pattern as LED brightness above, not the
+ *     one-shot OTA-request pattern.
  *   - The portal's built-in "Info" page (generic ESP32 chip/heap/uptime
  *     diagnostics) is hidden; a lime-green "P@cho" logo (inline SVG) plus
  *     a "Device status" section at the top of the landing menu page show
@@ -73,8 +72,13 @@
  *     API), since that page covers both WiFi and MQTT/device settings.
  *   - Static IP / gateway / subnet / DNS / BSSID pinning, same idea as
  *     temp_humidity_sensor's compile-time equivalent but runtime-
- *     configurable and optional here (a checkbox, DHCP by default) --
- *     see the "Network settings" section on the portal's Configure page.
+ *     configurable and optional here -- DHCP unless the static IP address
+ *     field on the portal's Configure page is filled in (deliberately not
+ *     a checkbox: WiFiManagerParameter's template always emits its own
+ *     value='{defaultValue}', so any custom "value=" attribute collides
+ *     with it and produces a duplicate HTML attribute no matter what the
+ *     default is -- there's no way to build a working checkbox through
+ *     this API at all, as the factory-reset checkbox saga also found).
  *     Applied fresh every normal-cycle connect attempt (WiFi.config()
  *     only takes effect for the WiFi.begin() call right after it). The
  *     portal also does its own quick WiFi scan (separate from
@@ -144,7 +148,11 @@ struct Settings {
   String deviceId;   // used in MQTT topics/unique_ids -- keep stable once devices exist
   String deviceName; // friendly name shown in Home Assistant
   uint8_t ledBrightnessPct = LED_BRIGHTNESS_PCT; // config.h value is just the initial default; adjustable at runtime from HA
-  float battDividerRatio = BATT_DIVIDER_RATIO; // config.h value is just the initial default; adjustable at runtime from HA -- see the "Battery Calibration" number entity
+  // Added to the raw (BATT_DIVIDER_RATIO + BATT_CAL) reading to get the
+  // final reported battery voltage -- e.g. 0.15 means "add 0.15V to
+  // whatever the hardware reports". Adjustable at runtime from HA via the
+  // "Battery Calibration" number entity; 0 = no correction.
+  float battVoltageOffsetV = 0.0f;
   bool configured = false;
 
   // Static IP, same idea as temp_humidity_sensor's compile-time equivalent
@@ -237,7 +245,7 @@ void loadSettings() {
   settings.deviceId     = settingsPrefs.getString("deviceId", "th4_" + chipId);
   settings.deviceName   = settingsPrefs.getString("deviceName", "Temp Sensor " + chipId);
   settings.ledBrightnessPct = settingsPrefs.getUChar("ledBrightPct", LED_BRIGHTNESS_PCT);
-  settings.battDividerRatio = settingsPrefs.getFloat("battRatio", BATT_DIVIDER_RATIO);
+  settings.battVoltageOffsetV = settingsPrefs.getFloat("battOffsetV", 0.0f);
   settings.useStaticIp = settingsPrefs.getBool("useStaticIp", false);
   settings.staticIp    = settingsPrefs.getString("staticIp", "");
   settings.gateway     = settingsPrefs.getString("gateway", "");
@@ -259,7 +267,7 @@ void saveSettings() {
   settingsPrefs.putString("deviceId", settings.deviceId);
   settingsPrefs.putString("deviceName", settings.deviceName);
   settingsPrefs.putUChar("ledBrightPct", settings.ledBrightnessPct);
-  settingsPrefs.putFloat("battRatio", settings.battDividerRatio);
+  settingsPrefs.putFloat("battOffsetV", settings.battVoltageOffsetV);
   settingsPrefs.putBool("useStaticIp", settings.useStaticIp);
   settingsPrefs.putString("staticIp", settings.staticIp);
   settingsPrefs.putString("gateway", settings.gateway);
@@ -276,12 +284,12 @@ String TOPIC_TEMP, TOPIC_HUMIDITY, TOPIC_BATTERY_V, TOPIC_BATTERY_PCT, TOPIC_RSS
        TOPIC_LAST_UPDATE, TOPIC_RESET_REASON, TOPIC_FAIL_COUNT, TOPIC_TOTAL_FAIL_COUNT,
        TOPIC_OTA_REQUEST, TOPIC_BATTERY_LOW, TOPIC_BOOT_COUNT, TOPIC_FW_VERSION,
        TOPIC_LAST_FULL_CHARGE, TOPIC_LED_BRIGHTNESS, TOPIC_LED_BRIGHTNESS_SET,
-       TOPIC_BATTERY_V_RAW, TOPIC_BATTERY_CAL_ACTUAL;
+       TOPIC_BATTERY_V_RAW, TOPIC_BATTERY_CAL_OFFSET, TOPIC_BATTERY_CAL_OFFSET_SET;
 String DISCOVERY_TEMP, DISCOVERY_HUMIDITY, DISCOVERY_BATTERY_V, DISCOVERY_BATTERY_PCT,
        DISCOVERY_RSSI, DISCOVERY_LAST_UPDATE, DISCOVERY_RESET_REASON, DISCOVERY_FAIL_COUNT,
        DISCOVERY_TOTAL_FAIL_COUNT, DISCOVERY_OTA_REQUEST, DISCOVERY_BATTERY_LOW,
        DISCOVERY_BOOT_COUNT, DISCOVERY_FW_VERSION, DISCOVERY_LAST_FULL_CHARGE,
-       DISCOVERY_LED_BRIGHTNESS, DISCOVERY_BATTERY_V_RAW, DISCOVERY_BATTERY_CAL_ACTUAL;
+       DISCOVERY_LED_BRIGHTNESS, DISCOVERY_BATTERY_V_RAW, DISCOVERY_BATTERY_CAL_OFFSET;
 
 void buildTopics() {
   String base = String("home/") + settings.deviceId;
@@ -301,8 +309,9 @@ void buildTopics() {
   TOPIC_LAST_FULL_CHARGE = base + "/last_full_charge";
   TOPIC_LED_BRIGHTNESS     = base + "/led_brightness";
   TOPIC_LED_BRIGHTNESS_SET = base + "/led_brightness/set";
-  TOPIC_BATTERY_V_RAW      = base + "/battery_voltage_raw"; // pre-calibration, for comparing against a multimeter
-  TOPIC_BATTERY_CAL_ACTUAL = base + "/battery_cal_actual"; // retained one-shot: set to the multimeter reading to calibrate, device consumes it and resets to 0
+  TOPIC_BATTERY_V_RAW        = base + "/battery_voltage_raw"; // pre-calibration, for comparing against a multimeter
+  TOPIC_BATTERY_CAL_OFFSET     = base + "/battery_cal_offset";
+  TOPIC_BATTERY_CAL_OFFSET_SET = base + "/battery_cal_offset/set";
 
   String sbase = String("homeassistant/sensor/") + settings.deviceId;
   DISCOVERY_TEMP             = sbase + "/temperature/config";
@@ -321,7 +330,7 @@ void buildTopics() {
   DISCOVERY_OTA_REQUEST      = String("homeassistant/switch/") + settings.deviceId + "/ota_request/config";
   DISCOVERY_LED_BRIGHTNESS   = String("homeassistant/number/") + settings.deviceId + "/led_brightness/config";
   DISCOVERY_BATTERY_V_RAW      = sbase + "/battery_voltage_raw/config";
-  DISCOVERY_BATTERY_CAL_ACTUAL = String("homeassistant/number/") + settings.deviceId + "/battery_cal_actual/config";
+  DISCOVERY_BATTERY_CAL_OFFSET = String("homeassistant/number/") + settings.deviceId + "/battery_cal_offset/config";
 }
 
 // ---------------- Persisted state (survives deep sleep) ----------------
@@ -367,13 +376,12 @@ char g_otaRequestPayload[8] = {0};
 volatile bool g_brightnessCmdReceived = false;
 char g_brightnessCmdPayload[8] = {0};
 
-// Same one-shot pattern as the OTA request above (not the persistent
-// LED-brightness pattern): HA sets this to what a multimeter reads on the
-// battery right now, the device consumes it on its next wake to recompute
-// settings.battDividerRatio, then resets the topic back to "0" so it
-// doesn't reapply the same stale reading forever on every future wake.
-volatile bool g_battCalReceived = false;
-char g_battCalPayload[12] = {0};
+// Same persistent pattern as LED brightness above (not the one-shot OTA-
+// request pattern): a plain calibration offset in volts, added to every
+// future battery reading. Applies on the device's next wake and is echoed
+// back as the new state, same latency as LED brightness.
+volatile bool g_battCalCmdReceived = false;
+char g_battCalCmdPayload[12] = {0};
 
 void onMqttMessage(const espMqttClientTypes::MessageProperties& properties, const char* topic,
                     const uint8_t* payload, size_t len, size_t index, size_t total) {
@@ -387,11 +395,11 @@ void onMqttMessage(const espMqttClientTypes::MessageProperties& properties, cons
     memcpy(g_brightnessCmdPayload, payload, copyLen);
     g_brightnessCmdPayload[copyLen] = '\0';
     g_brightnessCmdReceived = true;
-  } else if (TOPIC_BATTERY_CAL_ACTUAL.equals(topic)) {
-    size_t copyLen = len < sizeof(g_battCalPayload) - 1 ? len : sizeof(g_battCalPayload) - 1;
-    memcpy(g_battCalPayload, payload, copyLen);
-    g_battCalPayload[copyLen] = '\0';
-    g_battCalReceived = true;
+  } else if (TOPIC_BATTERY_CAL_OFFSET_SET.equals(topic)) {
+    size_t copyLen = len < sizeof(g_battCalCmdPayload) - 1 ? len : sizeof(g_battCalCmdPayload) - 1;
+    memcpy(g_battCalCmdPayload, payload, copyLen);
+    g_battCalCmdPayload[copyLen] = '\0';
+    g_battCalCmdReceived = true;
   }
 }
 
@@ -600,8 +608,8 @@ void setup() {
       mqttClient.subscribe(TOPIC_OTA_REQUEST.c_str(), 1);
       g_brightnessCmdReceived = false;
       mqttClient.subscribe(TOPIC_LED_BRIGHTNESS_SET.c_str(), 1);
-      g_battCalReceived = false;
-      mqttClient.subscribe(TOPIC_BATTERY_CAL_ACTUAL.c_str(), 1);
+      g_battCalCmdReceived = false;
+      mqttClient.subscribe(TOPIC_BATTERY_CAL_OFFSET_SET.c_str(), 1);
 
       if (!discoverySent) {
         sendDiscoveryConfig();
@@ -641,29 +649,20 @@ void setup() {
       // brand-new device's first-ever connect.
       publishWithAck(TOPIC_LED_BRIGHTNESS.c_str(), String(settings.ledBrightnessPct).c_str(), true);
 
-      // Battery calibration: HA sets this to what a multimeter reads on
-      // the battery right now; rawBattV above is THIS cycle's own raw
-      // reading (already published as Battery Voltage (Raw)), so the new
-      // ratio is computed as a simple proportional correction against it.
-      // A stale/zero value (nothing entered, or the reset from a previous
-      // cycle) is treated as "nothing pending" -- deliberately not
-      // "!= previous value", since the retained topic redelivers the same
-      // number on every subscribe until this resets it, and there's no
-      // way to tell "still the same request" from "resubmitted on
-      // purpose" other than the reset itself breaking that chain.
-      if (g_battCalReceived) {
-        float enteredActual = atof(g_battCalPayload);
-        if (enteredActual > 0.01f && rawBattV > 0.01f) {
-          float newRatio = settings.battDividerRatio * (enteredActual / rawBattV);
-          Serial.printf("Battery calibration: raw=%.3fV entered=%.3fV ratio %.4f -> %.4f\n",
-                        rawBattV, enteredActual, settings.battDividerRatio, newRatio);
-          settings.battDividerRatio = newRatio;
+      // Battery calibration offset: a plain volts-added correction, same
+      // pattern as LED brightness above -- apply if changed, then always
+      // echo the current value back as state.
+      if (g_battCalCmdReceived) {
+        float requested = atof(g_battCalCmdPayload);
+        if (requested < -1.0f) requested = -1.0f;
+        if (requested > 1.0f) requested = 1.0f;
+        if (requested != settings.battVoltageOffsetV) {
+          settings.battVoltageOffsetV = requested;
           saveSettings();
+          Serial.printf("Battery calibration offset set to %.3fV via HA.\n", settings.battVoltageOffsetV);
         }
-        // Reset either way -- an out-of-range/unparseable entry shouldn't
-        // sit there forever looking like it's still pending.
-        publishWithAck(TOPIC_BATTERY_CAL_ACTUAL.c_str(), "0", true);
       }
+      publishWithAck(TOPIC_BATTERY_CAL_OFFSET.c_str(), String(settings.battVoltageOffsetV, 3).c_str(), true);
     } else {
       Serial.println("MQTT connect failed, skipping publish this cycle.");
       connectFailCount++;
@@ -914,23 +913,28 @@ void runMaintenanceMode(bool viaButton) {
 
   // Network settings (static IP + BSSID pin), same idea as
   // temp_humidity_sensor's compile-time equivalent but runtime-
-  // configurable and optional -- DHCP by default, and every field below
-  // is ignored unless the checkbox is checked. The checkbox uses the same
-  // empty-default + custom-attribute "value" trick the factory-reset
-  // checkbox eventually needed (see v4.3.0b's Version History entry) to
-  // avoid a duplicate HTML `value` attribute -- unlike that one, though,
-  // this doesn't need the early-loop workaround v4.3.0b also required,
-  // since it's read at the same point as every other field here (after
-  // `connected` resolves), not before.
-  String staticCheckboxAttrs = String("type=\"checkbox\" value=\"1\"") + (settings.useStaticIp ? " checked" : "");
+  // configurable and optional -- DHCP by default. NOT a checkbox: a
+  // checkbox was tried here first and never actually worked, for the
+  // exact same reason the factory-reset checkbox never worked in v4.2.0b
+  // -v4.2.4b (see those Version History entries) -- WiFiManagerParameter's
+  // template always emits value='{defaultValue}' itself, so ANY custom
+  // "value=" attribute added alongside it (checked or not, empty default
+  // or not) collides with that and produces a duplicate HTML `value`
+  // attribute, which browsers resolve unpredictably. There's no way to
+  // build a working checkbox through this API at all, empty default or
+  // not -- the earlier factory-reset "fix" only ever looked fixed because
+  // it wasn't actually tested against a real submission until much later.
+  // So: static IP is chosen implicitly by filling in the IP address field
+  // below, not by a separate checkbox next to it.
   String bssidSectionHtml = "<p style='margin-bottom:4px;font-size:0.9em;'>Networks seen just now "
     "(SSID &mdash; BSSID &mdash; signal) &mdash; tap one to fill in its BSSID below, "
     "or type/paste one in manually:</p>" + bssidListHtml;
   WiFiManagerParameter p_net_heading(
     "<hr><p style='margin-bottom:0;'><strong>Network settings (optional)</strong><br>"
-    "Leave unchecked for DHCP -- recommended unless you have a specific reason for a static IP.</p>");
-  WiFiManagerParameter p_use_static_ip("use_static_ip", "Use static IP instead of DHCP", "", 2, staticCheckboxAttrs.c_str());
-  WiFiManagerParameter p_static_ip("static_ip", "Static IP address", settings.staticIp.c_str(), 15);
+    "Leave the IP address field below blank for DHCP (recommended unless you have "
+    "a specific reason for a static IP) -- fill it in, along with Gateway and "
+    "Subnet, to use a static IP instead.</p>");
+  WiFiManagerParameter p_static_ip("static_ip", "Static IP address (blank = DHCP)", settings.staticIp.c_str(), 15);
   WiFiManagerParameter p_gateway("gateway", "Gateway", settings.gateway.c_str(), 15);
   WiFiManagerParameter p_subnet("subnet", "Subnet mask", settings.subnet.c_str(), 15);
   WiFiManagerParameter p_dns("dns", "DNS server (optional)", settings.dns.c_str(), 15);
@@ -992,7 +996,6 @@ void runMaintenanceMode(bool viaButton) {
                           + "h1,h3{display:none;}</style>";
   wm.setCustomHeadElement(versionHeader.c_str());
   wm.addParameter(&p_net_heading);
-  wm.addParameter(&p_use_static_ip);
   wm.addParameter(&p_static_ip);
   wm.addParameter(&p_gateway);
   wm.addParameter(&p_subnet);
@@ -1147,12 +1150,14 @@ void runMaintenanceMode(bool viaButton) {
 
   // Static IP / BSSID pin. Fields are saved as entered regardless of
   // validity (so a typo is still there to fix on the next portal visit,
-  // not silently wiped), but useStaticIp only gets set true if IP/
-  // gateway/subnet actually parse -- an invalid address saved as
-  // "enabled" would silently break connectivity on the very next normal
-  // cycle, with no portal open to fix it short of holding the button
-  // again.
-  bool staticRequested = (strcmp(p_use_static_ip.getValue(), "1") == 0);
+  // not silently wiped), but useStaticIp only gets set true if the IP
+  // field is non-empty AND it/gateway/subnet actually parse -- an invalid
+  // address saved as "enabled" would silently break connectivity on the
+  // very next normal cycle, with no portal open to fix it short of
+  // holding the button again. No separate checkbox (see the comment where
+  // these WiFiManagerParameters are declared for why) -- filling in the
+  // IP field is itself the "use static IP" choice.
+  bool staticRequested = (strlen(p_static_ip.getValue()) > 0);
   settings.staticIp = p_static_ip.getValue();
   settings.gateway  = p_gateway.getValue();
   settings.subnet   = p_subnet.getValue();
@@ -1342,31 +1347,31 @@ void sendDiscoveryConfig() {
     + devBlock + "}";
   publishWithAck(DISCOVERY_BATTERY_V_RAW.c_str(), battVRawPayload.c_str(), true);
 
-  // A control, not a reading -- no expire_after, same reasoning as the
-  // other command-ish entities above. Enter what a multimeter reads on
-  // the battery right now (compare against Battery Voltage (Raw) above,
-  // ideally from the same or very next cycle, since it can drift a little
-  // between readings) and the device computes a new battDividerRatio from
-  // it on its next wake, then resets this back to 0 -- so re-submitting
-  // the same number does nothing further, and the entity always reads 0
-  // when idle rather than showing a stale value as if it were still
-  // pending.
+  // A control, not a reading -- no expire_after, same reasoning as the LED
+  // Brightness entity above, and the same persistent-value pattern (not
+  // one-shot): a plain volts offset added to every future battery
+  // reading. Work out the offset as (multimeter reading) - (Battery
+  // Voltage (Raw) above, ideally from the same or very next cycle, since
+  // it can drift a little between readings) and enter THAT difference
+  // here -- e.g. 0.15 means "the hardware reads 0.15V low, add 0.15V from
+  // now on". Applies on the device's next wake and is echoed back as the
+  // new state, same latency as LED Brightness.
   String battCalPayload = String("{")
-    + "\"name\":\"" + settings.deviceName + " Battery Calibration (measured V)\","
-    + "\"unique_id\":\"" + settings.deviceId + "_battery_cal_actual\","
+    + "\"name\":\"" + settings.deviceName + " Battery Calibration Offset\","
+    + "\"unique_id\":\"" + settings.deviceId + "_battery_cal_offset\","
     + "\"entity_category\":\"config\","
     + "\"icon\":\"mdi:tune-variant\","
-    + "\"min\":0,"
-    + "\"max\":5,"
+    + "\"min\":-1,"
+    + "\"max\":1,"
     + "\"step\":0.01,"
     + "\"unit_of_measurement\":\"V\","
     + "\"mode\":\"box\","
     + "\"optimistic\":false,"
     + "\"retain\":true,"
-    + "\"command_topic\":\"" + TOPIC_BATTERY_CAL_ACTUAL + "\","
-    + "\"state_topic\":\"" + TOPIC_BATTERY_CAL_ACTUAL + "\","
+    + "\"command_topic\":\"" + TOPIC_BATTERY_CAL_OFFSET_SET + "\","
+    + "\"state_topic\":\"" + TOPIC_BATTERY_CAL_OFFSET + "\","
     + devBlock + "}";
-  publishWithAck(DISCOVERY_BATTERY_CAL_ACTUAL.c_str(), battCalPayload.c_str(), true);
+  publishWithAck(DISCOVERY_BATTERY_CAL_OFFSET.c_str(), battCalPayload.c_str(), true);
 
   String battPctPayload = String("{")
     + "\"name\":\"" + settings.deviceName + " Battery\","
@@ -1668,37 +1673,40 @@ float readBatteryVoltage(float* rawOut) {
     delay(2); // small gap between reads
   }
   uint32_t rawMillivolts = sumMillivolts / BATT_ADC_SAMPLES;
-  // settings.battDividerRatio, not the config.h BATT_DIVIDER_RATIO constant
-  // directly -- that's just its initial default now; runtime-adjustable via
-  // the "Battery Calibration" number entity in HA (see onMqttMessage() /
-  // the g_battCalReceived handling in setup()).
-  float raw = (rawMillivolts / 1000.0f) * settings.battDividerRatio;
-  // Reported out BEFORE the BATT_CAL curve below touches it -- an honest
-  // "what the hardware measured" figure to compare against a multimeter,
-  // independent of the (usually identity, but not necessarily) piecewise
-  // correction that follows. Optional: existing callers that don't care
-  // pass nullptr and nothing changes for them.
+  float raw = (rawMillivolts / 1000.0f) * BATT_DIVIDER_RATIO;
+  // Reported out BEFORE the BATT_CAL curve and the HA calibration offset
+  // below touch it -- an honest "what the hardware measured" figure to
+  // compare against a multimeter, unaffected by whatever correction is
+  // currently applied. Optional: existing callers that don't care pass
+  // nullptr and nothing changes for them.
   if (rawOut) *rawOut = raw;
 
   // Apply the same piecewise-linear correction as the ESPHome calibrate_linear filter
+  float corrected;
   if (raw <= BATT_CAL[0].raw) {
     // Extrapolate below the first point using the first segment's slope
     float slope = (BATT_CAL[1].actual - BATT_CAL[0].actual) / (BATT_CAL[1].raw - BATT_CAL[0].raw);
-    return BATT_CAL[0].actual + (raw - BATT_CAL[0].raw) * slope;
-  }
-  if (raw >= BATT_CAL[BATT_CAL_POINTS - 1].raw) {
+    corrected = BATT_CAL[0].actual + (raw - BATT_CAL[0].raw) * slope;
+  } else if (raw >= BATT_CAL[BATT_CAL_POINTS - 1].raw) {
     // Extrapolate above the last point using the last segment's slope
     float slope = (BATT_CAL[BATT_CAL_POINTS - 1].actual - BATT_CAL[BATT_CAL_POINTS - 2].actual)
                  / (BATT_CAL[BATT_CAL_POINTS - 1].raw - BATT_CAL[BATT_CAL_POINTS - 2].raw);
-    return BATT_CAL[BATT_CAL_POINTS - 1].actual + (raw - BATT_CAL[BATT_CAL_POINTS - 1].raw) * slope;
-  }
-  for (int i = 0; i < BATT_CAL_POINTS - 1; i++) {
-    if (raw >= BATT_CAL[i].raw && raw <= BATT_CAL[i + 1].raw) {
-      float slope = (BATT_CAL[i + 1].actual - BATT_CAL[i].actual) / (BATT_CAL[i + 1].raw - BATT_CAL[i].raw);
-      return BATT_CAL[i].actual + (raw - BATT_CAL[i].raw) * slope;
+    corrected = BATT_CAL[BATT_CAL_POINTS - 1].actual + (raw - BATT_CAL[BATT_CAL_POINTS - 1].raw) * slope;
+  } else {
+    corrected = raw; // overwritten below unless BATT_CAL_POINTS is somehow < 2
+    for (int i = 0; i < BATT_CAL_POINTS - 1; i++) {
+      if (raw >= BATT_CAL[i].raw && raw <= BATT_CAL[i + 1].raw) {
+        float slope = (BATT_CAL[i + 1].actual - BATT_CAL[i].actual) / (BATT_CAL[i + 1].raw - BATT_CAL[i].raw);
+        corrected = BATT_CAL[i].actual + (raw - BATT_CAL[i].raw) * slope;
+        break;
+      }
     }
   }
-  return raw; // unreachable, keeps the compiler happy
+
+  // The HA-adjustable correction: a plain additive offset (e.g. entering
+  // 0.15 in the "Battery Calibration" entity means "add 0.15V to whatever
+  // the hardware reports"), applied last, on top of BATT_CAL. 0 by default.
+  return corrected + settings.battVoltageOffsetV;
 }
 
 float batteryPercentage(float v) {

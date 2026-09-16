@@ -89,18 +89,25 @@ its current settings.
 ### Network settings (static IP / BSSID)
 
 Same idea as `temp_humidity_sensor`'s compile-time static IP options, but
-runtime-configurable and optional here — a **"Use static IP instead of
-DHCP"** checkbox on the Configure page, unchecked (plain DHCP) by default:
+runtime-configurable and optional here. **No checkbox** — a checkbox was
+tried first and never actually worked, for the same reason the factory-
+reset checkbox never worked (see v4.2.0b–v4.2.4b and v4.8.1b's Version
+History entries): `WiFiManagerParameter`'s template always emits its own
+`value='{defaultValue}'`, so any custom `value=` attribute added alongside
+it collides and produces a duplicate HTML `value` attribute, empty
+default or not — there's no way to build a working checkbox through this
+API at all. Static IP is chosen implicitly instead: **leave the "Static
+IP address" field blank for DHCP** (default), or fill it in (with Gateway
+and Subnet) to use a static IP.
 
-- **Static IP address / Gateway / Subnet mask / DNS server** — only used
-  if the checkbox above them is checked. Subnet mask defaults to
-  `255.255.255.0` if left blank. If the checkbox is checked but the IP,
-  gateway, or subnet don't parse as valid addresses, the save falls back
-  to DHCP instead of saving a config that would silently break
-  connectivity on the next normal cycle — check Serial if a static IP
-  doesn't seem to be taking effect.
-- **WiFi BSSID / MAC** (optional, independent of the static-IP checkbox)
-  — pins the connection to one specific access point by MAC address,
+- **Static IP address / Gateway / Subnet mask / DNS server** — Subnet
+  mask defaults to `255.255.255.0` if left blank. If the IP address field
+  is filled in but the IP, gateway, or subnet don't parse as valid
+  addresses, the save falls back to DHCP instead of saving a config that
+  would silently break connectivity on the next normal cycle — check
+  Serial if a static IP doesn't seem to be taking effect.
+- **WiFi BSSID / MAC** (optional, independent of the static IP fields) —
+  pins the connection to one specific access point by MAC address,
   instead of whichever AP happens to answer the SSID. Useful for a
   mesh/repeater setup where more than one AP shares the same network
   name and you want this unit to always use a specific one (e.g. the
@@ -231,7 +238,13 @@ survives power loss and firmware updates, and is reset back to the
 Same underlying need as every other battery sensor in this fleet —
 measure your own unit's raw-vs-actual voltage before trusting precise
 battery % — but done from Home Assistant here instead of editing
-`BATT_CAL`/`BATT_DIVIDER_RATIO` in `config.h` and reflashing:
+`BATT_CAL`/`BATT_DIVIDER_RATIO` in `config.h` and reflashing. **A plain
+offset in volts, added to every future reading** — entering `0.15` means
+"add 0.15V to whatever the hardware reports from now on", not "set the
+battery voltage to 0.15V" (an earlier version computed a multiplicative
+correction ratio from an absolute multimeter reading instead, which read
+as exactly that kind of nonsense output for a value like `0.15`; this
+replaces it):
 
 1. Check the **"Battery Voltage (Raw)"** diagnostic sensor in HA — the
    pre-calibration reading, i.e. exactly what the ADC and voltage divider
@@ -242,13 +255,12 @@ battery % — but done from Home Assistant here instead of editing
    time to step 1 as you can — voltage can drift slightly between
    readings, and this device only wakes roughly every
    `SLEEP_INTERVAL_US`, so there's inherently some lag either way.
-3. Enter that multimeter reading into the **"Battery Calibration"**
-   number entity in HA. On its next wake, the device computes a new
-   correction ratio from the two values (a proportional/divider-style
-   correction, not a full curve refit) and persists it, then resets the
-   entity back to `0` — so it won't reapply the same reading on every
-   future wake, and the entity reading `0` when idle means "nothing
-   pending" rather than a stale leftover value.
+3. Subtract: `multimeter reading − Battery Voltage (Raw)`. Enter *that
+   difference* (can be negative) into the **"Battery Calibration
+   Offset"** number entity in HA — same persistent-value pattern as LED
+   Brightness, not a one-shot action: it stays at whatever you last set it
+   to, editable anytime, and always reflects the currently-applied offset
+   rather than resetting itself.
 
 Takes effect on the wake after you submit it — same latency as the LED
 brightness and remote-OTA-request entities, since the device is asleep
@@ -322,3 +334,4 @@ numbering.
 | v4.7.0b | 2026-09-16 | Added static IP / gateway / subnet / DNS / BSSID pinning -- same idea as `temp_humidity_sensor`'s compile-time equivalent, but runtime-configurable and optional (a "Use static IP" checkbox, unchecked/DHCP by default) via a new "Network settings" section on the Configure page. Subnet defaults to `255.255.255.0`; an invalid IP/gateway/subnet with the checkbox checked falls back to DHCP rather than saving a config that would silently break connectivity. The portal also runs its own WiFi scan (WiFiManager's own picker has no BSSID concept at all) and lists nearby networks' BSSIDs for reference. Applied fresh on every normal-cycle connect attempt in `attemptWifiConnect()`, since `WiFi.config()` only affects the `WiFi.begin()` call right after it. |
 | v4.7.1b | 2026-09-16 | Made the v4.7.0b BSSID reference list clickable -- tap a network to fill in its BSSID field automatically, via inline `onclick` (no `<script>` block; works even in restrictive captive-portal browsers, and if JS genuinely isn't available the field is still a normal text input). Added `htmlEscape()`/`jsAttrEscape()` and ran every scanned SSID through them before it reaches the page -- a nearby network's SSID is attacker-controlled data (any AP in range broadcasts whatever string it wants), so without escaping, a maliciously-named network could inject script into this device's own setup page via that onclick handler. |
 | v4.8.0b | 2026-09-16 | Moved battery voltage calibration to Home Assistant instead of editing `BATT_CAL`/`BATT_DIVIDER_RATIO` in `config.h` and reflashing: a new "Battery Voltage (Raw)" diagnostic sensor shows the pre-calibration reading, and a "Battery Calibration" number entity takes what a multimeter actually reads -- the device computes a new `settings.battDividerRatio` from the two (a proportional correction, persisted in NVS; `readBatteryVoltage()` gained an optional out-param to expose the raw value for this) on its next wake, then resets the entity back to `0`, same one-shot pattern as the remote OTA-request switch. |
+| v4.8.1b | 2026-09-17 | Fixed two real bugs reported from hardware: (1) the v4.7.0b static-IP checkbox never actually worked -- same root cause as the factory-reset checkbox saga (v4.2.0b-v4.2.4b): `WiFiManagerParameter`'s template always emits its own `value='{defaultValue}'`, so a custom `value=` attribute collides with it regardless of whether the default is empty, producing a duplicate HTML attribute. There's no way to build a working checkbox through this API at all -- removed it entirely; static IP is now chosen by filling in the "Static IP address" field itself (blank = DHCP), no separate checkbox. (2) The v4.8.0b battery calibration entity computed a multiplicative ratio from an absolute multimeter reading, which read as nonsense for a value like entering `0.15` (battery voltage became ~0.15V instead of being corrected by 0.15V). Replaced with a plain additive offset (`settings.battVoltageOffsetV`, volts, persistent like LED brightness rather than one-shot) -- entering `0.15` now means "add 0.15V", matching what was actually expected. |
