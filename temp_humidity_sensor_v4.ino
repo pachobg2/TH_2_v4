@@ -51,6 +51,16 @@
  *     Brightness" number entity, 0-100%), not just a fixed config.h value
  *     -- persisted in NVS (settings.ledBrightnessPct), applied on the next
  *     wake after a change, same latency as the remote OTA-request switch.
+ *   - Battery voltage calibration is also done from Home Assistant now,
+ *     instead of editing BATT_CAL in config.h and reflashing: a "Battery
+ *     Voltage (Raw)" diagnostic sensor shows the pre-calibration reading
+ *     to compare against a multimeter, and a "Battery Calibration"
+ *     number entity takes what the multimeter actually reads -- the
+ *     device computes a new settings.battDividerRatio from the two on
+ *     its next wake (a simple proportional correction, same idea as
+ *     BATT_DIVIDER_RATIO in config.h, just runtime-adjustable and self-
+ *     computing instead of hand-edited), persists it, and resets the
+ *     entity back to 0 so it doesn't reapply the same reading forever.
  *   - The portal's built-in "Info" page (generic ESP32 chip/heap/uptime
  *     diagnostics) is hidden; a lime-green "P@cho" logo (inline SVG) plus
  *     a "Device status" section at the top of the landing menu page show
@@ -134,6 +144,7 @@ struct Settings {
   String deviceId;   // used in MQTT topics/unique_ids -- keep stable once devices exist
   String deviceName; // friendly name shown in Home Assistant
   uint8_t ledBrightnessPct = LED_BRIGHTNESS_PCT; // config.h value is just the initial default; adjustable at runtime from HA
+  float battDividerRatio = BATT_DIVIDER_RATIO; // config.h value is just the initial default; adjustable at runtime from HA -- see the "Battery Calibration" number entity
   bool configured = false;
 
   // Static IP, same idea as temp_humidity_sensor's compile-time equivalent
@@ -226,6 +237,7 @@ void loadSettings() {
   settings.deviceId     = settingsPrefs.getString("deviceId", "th4_" + chipId);
   settings.deviceName   = settingsPrefs.getString("deviceName", "Temp Sensor " + chipId);
   settings.ledBrightnessPct = settingsPrefs.getUChar("ledBrightPct", LED_BRIGHTNESS_PCT);
+  settings.battDividerRatio = settingsPrefs.getFloat("battRatio", BATT_DIVIDER_RATIO);
   settings.useStaticIp = settingsPrefs.getBool("useStaticIp", false);
   settings.staticIp    = settingsPrefs.getString("staticIp", "");
   settings.gateway     = settingsPrefs.getString("gateway", "");
@@ -247,6 +259,7 @@ void saveSettings() {
   settingsPrefs.putString("deviceId", settings.deviceId);
   settingsPrefs.putString("deviceName", settings.deviceName);
   settingsPrefs.putUChar("ledBrightPct", settings.ledBrightnessPct);
+  settingsPrefs.putFloat("battRatio", settings.battDividerRatio);
   settingsPrefs.putBool("useStaticIp", settings.useStaticIp);
   settingsPrefs.putString("staticIp", settings.staticIp);
   settingsPrefs.putString("gateway", settings.gateway);
@@ -262,12 +275,13 @@ void saveSettings() {
 String TOPIC_TEMP, TOPIC_HUMIDITY, TOPIC_BATTERY_V, TOPIC_BATTERY_PCT, TOPIC_RSSI,
        TOPIC_LAST_UPDATE, TOPIC_RESET_REASON, TOPIC_FAIL_COUNT, TOPIC_TOTAL_FAIL_COUNT,
        TOPIC_OTA_REQUEST, TOPIC_BATTERY_LOW, TOPIC_BOOT_COUNT, TOPIC_FW_VERSION,
-       TOPIC_LAST_FULL_CHARGE, TOPIC_LED_BRIGHTNESS, TOPIC_LED_BRIGHTNESS_SET;
+       TOPIC_LAST_FULL_CHARGE, TOPIC_LED_BRIGHTNESS, TOPIC_LED_BRIGHTNESS_SET,
+       TOPIC_BATTERY_V_RAW, TOPIC_BATTERY_CAL_ACTUAL;
 String DISCOVERY_TEMP, DISCOVERY_HUMIDITY, DISCOVERY_BATTERY_V, DISCOVERY_BATTERY_PCT,
        DISCOVERY_RSSI, DISCOVERY_LAST_UPDATE, DISCOVERY_RESET_REASON, DISCOVERY_FAIL_COUNT,
        DISCOVERY_TOTAL_FAIL_COUNT, DISCOVERY_OTA_REQUEST, DISCOVERY_BATTERY_LOW,
        DISCOVERY_BOOT_COUNT, DISCOVERY_FW_VERSION, DISCOVERY_LAST_FULL_CHARGE,
-       DISCOVERY_LED_BRIGHTNESS;
+       DISCOVERY_LED_BRIGHTNESS, DISCOVERY_BATTERY_V_RAW, DISCOVERY_BATTERY_CAL_ACTUAL;
 
 void buildTopics() {
   String base = String("home/") + settings.deviceId;
@@ -287,6 +301,8 @@ void buildTopics() {
   TOPIC_LAST_FULL_CHARGE = base + "/last_full_charge";
   TOPIC_LED_BRIGHTNESS     = base + "/led_brightness";
   TOPIC_LED_BRIGHTNESS_SET = base + "/led_brightness/set";
+  TOPIC_BATTERY_V_RAW      = base + "/battery_voltage_raw"; // pre-calibration, for comparing against a multimeter
+  TOPIC_BATTERY_CAL_ACTUAL = base + "/battery_cal_actual"; // retained one-shot: set to the multimeter reading to calibrate, device consumes it and resets to 0
 
   String sbase = String("homeassistant/sensor/") + settings.deviceId;
   DISCOVERY_TEMP             = sbase + "/temperature/config";
@@ -304,6 +320,8 @@ void buildTopics() {
   DISCOVERY_BATTERY_LOW      = String("homeassistant/binary_sensor/") + settings.deviceId + "/battery_low/config";
   DISCOVERY_OTA_REQUEST      = String("homeassistant/switch/") + settings.deviceId + "/ota_request/config";
   DISCOVERY_LED_BRIGHTNESS   = String("homeassistant/number/") + settings.deviceId + "/led_brightness/config";
+  DISCOVERY_BATTERY_V_RAW      = sbase + "/battery_voltage_raw/config";
+  DISCOVERY_BATTERY_CAL_ACTUAL = String("homeassistant/number/") + settings.deviceId + "/battery_cal_actual/config";
 }
 
 // ---------------- Persisted state (survives deep sleep) ----------------
@@ -349,6 +367,14 @@ char g_otaRequestPayload[8] = {0};
 volatile bool g_brightnessCmdReceived = false;
 char g_brightnessCmdPayload[8] = {0};
 
+// Same one-shot pattern as the OTA request above (not the persistent
+// LED-brightness pattern): HA sets this to what a multimeter reads on the
+// battery right now, the device consumes it on its next wake to recompute
+// settings.battDividerRatio, then resets the topic back to "0" so it
+// doesn't reapply the same stale reading forever on every future wake.
+volatile bool g_battCalReceived = false;
+char g_battCalPayload[12] = {0};
+
 void onMqttMessage(const espMqttClientTypes::MessageProperties& properties, const char* topic,
                     const uint8_t* payload, size_t len, size_t index, size_t total) {
   if (TOPIC_OTA_REQUEST.equals(topic)) {
@@ -361,6 +387,11 @@ void onMqttMessage(const espMqttClientTypes::MessageProperties& properties, cons
     memcpy(g_brightnessCmdPayload, payload, copyLen);
     g_brightnessCmdPayload[copyLen] = '\0';
     g_brightnessCmdReceived = true;
+  } else if (TOPIC_BATTERY_CAL_ACTUAL.equals(topic)) {
+    size_t copyLen = len < sizeof(g_battCalPayload) - 1 ? len : sizeof(g_battCalPayload) - 1;
+    memcpy(g_battCalPayload, payload, copyLen);
+    g_battCalPayload[copyLen] = '\0';
+    g_battCalReceived = true;
   }
 }
 
@@ -447,10 +478,10 @@ bool attemptWifiConnect(uint8_t channel);
 bool connectMQTT();
 bool publishWithAck(const char* topic, const char* payload, bool retained);
 void sendDiscoveryConfig();
-int publishState(float tempC, float humidity, float battV, float battPct, int rssi, const String& resetReasonStr, uint32_t failCount);
+int publishState(float tempC, float humidity, float battV, float rawBattV, float battPct, int rssi, const String& resetReasonStr, uint32_t failCount);
 void goToSleep();
 SensorReading readSensor();
-float readBatteryVoltage();
+float readBatteryVoltage(float* rawOut = nullptr);
 float batteryPercentage(float v);
 uint32_t ledDutyForBrightness();
 void blink(int times, uint32_t onMs, uint32_t gapMs);
@@ -547,7 +578,8 @@ void setup() {
   float tempC = reading.tempC;
   float humidity = reading.humidity;
 
-  float battV = readBatteryVoltage();
+  float rawBattV = 0;
+  float battV = readBatteryVoltage(&rawBattV);
   float battPct = batteryPercentage(battV);
 
   connectWiFi();
@@ -568,12 +600,14 @@ void setup() {
       mqttClient.subscribe(TOPIC_OTA_REQUEST.c_str(), 1);
       g_brightnessCmdReceived = false;
       mqttClient.subscribe(TOPIC_LED_BRIGHTNESS_SET.c_str(), 1);
+      g_battCalReceived = false;
+      mqttClient.subscribe(TOPIC_BATTERY_CAL_ACTUAL.c_str(), 1);
 
       if (!discoverySent) {
         sendDiscoveryConfig();
         discoverySent = true;
       }
-      int unackedTopics = publishState(tempC, humidity, battV, battPct, rssi, resetReasonStr, connectFailCount);
+      int unackedTopics = publishState(tempC, humidity, battV, rawBattV, battPct, rssi, resetReasonStr, connectFailCount);
 
       if (unackedTopics == 0) {
         published = true;
@@ -606,6 +640,30 @@ void setup() {
       // reflects the actual saved value, even after a factory reset or a
       // brand-new device's first-ever connect.
       publishWithAck(TOPIC_LED_BRIGHTNESS.c_str(), String(settings.ledBrightnessPct).c_str(), true);
+
+      // Battery calibration: HA sets this to what a multimeter reads on
+      // the battery right now; rawBattV above is THIS cycle's own raw
+      // reading (already published as Battery Voltage (Raw)), so the new
+      // ratio is computed as a simple proportional correction against it.
+      // A stale/zero value (nothing entered, or the reset from a previous
+      // cycle) is treated as "nothing pending" -- deliberately not
+      // "!= previous value", since the retained topic redelivers the same
+      // number on every subscribe until this resets it, and there's no
+      // way to tell "still the same request" from "resubmitted on
+      // purpose" other than the reset itself breaking that chain.
+      if (g_battCalReceived) {
+        float enteredActual = atof(g_battCalPayload);
+        if (enteredActual > 0.01f && rawBattV > 0.01f) {
+          float newRatio = settings.battDividerRatio * (enteredActual / rawBattV);
+          Serial.printf("Battery calibration: raw=%.3fV entered=%.3fV ratio %.4f -> %.4f\n",
+                        rawBattV, enteredActual, settings.battDividerRatio, newRatio);
+          settings.battDividerRatio = newRatio;
+          saveSettings();
+        }
+        // Reset either way -- an out-of-range/unparseable entry shouldn't
+        // sit there forever looking like it's still pending.
+        publishWithAck(TOPIC_BATTERY_CAL_ACTUAL.c_str(), "0", true);
+      }
     } else {
       Serial.println("MQTT connect failed, skipping publish this cycle.");
       connectFailCount++;
@@ -1265,6 +1323,51 @@ void sendDiscoveryConfig() {
     + devBlock + "}";
   publishWithAck(DISCOVERY_BATTERY_V.c_str(), battVPayload.c_str(), true);
 
+  // Pre-calibration reading -- the same ADC sample, divider ratio, and NO
+  // BATT_CAL curve correction. Exists purely so there's always an honest
+  // "what the hardware actually measured" number to compare against a
+  // multimeter, regardless of whatever calibration is currently applied
+  // (the main Battery Voltage sensor above reflects THAT, which after a
+  // first calibration round no longer equals the hardware's raw reading).
+  String battVRawPayload = String("{")
+    + "\"name\":\"" + settings.deviceName + " Battery Voltage (Raw)\","
+    + "\"unique_id\":\"" + settings.deviceId + "_battery_voltage_raw\","
+    + "\"device_class\":\"voltage\","
+    + "\"unit_of_measurement\":\"V\","
+    + "\"state_class\":\"measurement\","
+    + "\"entity_category\":\"diagnostic\","
+    + "\"suggested_display_precision\":3,"
+    + "\"expire_after\":" + String(EXPIRE_AFTER_SEC) + ","
+    + "\"state_topic\":\"" + TOPIC_BATTERY_V_RAW + "\","
+    + devBlock + "}";
+  publishWithAck(DISCOVERY_BATTERY_V_RAW.c_str(), battVRawPayload.c_str(), true);
+
+  // A control, not a reading -- no expire_after, same reasoning as the
+  // other command-ish entities above. Enter what a multimeter reads on
+  // the battery right now (compare against Battery Voltage (Raw) above,
+  // ideally from the same or very next cycle, since it can drift a little
+  // between readings) and the device computes a new battDividerRatio from
+  // it on its next wake, then resets this back to 0 -- so re-submitting
+  // the same number does nothing further, and the entity always reads 0
+  // when idle rather than showing a stale value as if it were still
+  // pending.
+  String battCalPayload = String("{")
+    + "\"name\":\"" + settings.deviceName + " Battery Calibration (measured V)\","
+    + "\"unique_id\":\"" + settings.deviceId + "_battery_cal_actual\","
+    + "\"entity_category\":\"config\","
+    + "\"icon\":\"mdi:tune-variant\","
+    + "\"min\":0,"
+    + "\"max\":5,"
+    + "\"step\":0.01,"
+    + "\"unit_of_measurement\":\"V\","
+    + "\"mode\":\"box\","
+    + "\"optimistic\":false,"
+    + "\"retain\":true,"
+    + "\"command_topic\":\"" + TOPIC_BATTERY_CAL_ACTUAL + "\","
+    + "\"state_topic\":\"" + TOPIC_BATTERY_CAL_ACTUAL + "\","
+    + devBlock + "}";
+  publishWithAck(DISCOVERY_BATTERY_CAL_ACTUAL.c_str(), battCalPayload.c_str(), true);
+
   String battPctPayload = String("{")
     + "\"name\":\"" + settings.deviceName + " Battery\","
     + "\"unique_id\":\"" + settings.deviceId + "_battery_percent\","
@@ -1420,7 +1523,7 @@ void sendDiscoveryConfig() {
   publishWithAck(DISCOVERY_LED_BRIGHTNESS.c_str(), ledBrightnessPayload.c_str(), true);
 }
 
-int publishState(float tempC, float humidity, float battV, float battPct, int rssi, const String& resetReasonStr, uint32_t failCount) {
+int publishState(float tempC, float humidity, float battV, float rawBattV, float battPct, int rssi, const String& resetReasonStr, uint32_t failCount) {
   char buf[16];
 
   int failed = 0;
@@ -1436,6 +1539,9 @@ int publishState(float tempC, float humidity, float battV, float battPct, int rs
 
   dtostrf(battV, 4, 2, buf);
   if (!publishWithAck(TOPIC_BATTERY_V.c_str(), buf, true)) failed++;
+
+  dtostrf(rawBattV, 4, 3, buf);
+  if (!publishWithAck(TOPIC_BATTERY_V_RAW.c_str(), buf, true)) failed++;
 
   dtostrf(battPct, 4, 0, buf);
   if (!publishWithAck(TOPIC_BATTERY_PCT.c_str(), buf, true)) failed++;
@@ -1551,7 +1657,7 @@ String updateAndGetLastFullChargeDate(float batteryPercent) {
   return result;
 }
 
-float readBatteryVoltage() {
+float readBatteryVoltage(float* rawOut) {
   // analogReadMilliVolts() uses the ESP32's factory ADC calibration (eFuse)
   // for an accurate mV reading -- far more accurate than manually mapping
   // raw analogRead() counts against an assumed 3.3V reference.
@@ -1562,7 +1668,17 @@ float readBatteryVoltage() {
     delay(2); // small gap between reads
   }
   uint32_t rawMillivolts = sumMillivolts / BATT_ADC_SAMPLES;
-  float raw = (rawMillivolts / 1000.0f) * BATT_DIVIDER_RATIO;
+  // settings.battDividerRatio, not the config.h BATT_DIVIDER_RATIO constant
+  // directly -- that's just its initial default now; runtime-adjustable via
+  // the "Battery Calibration" number entity in HA (see onMqttMessage() /
+  // the g_battCalReceived handling in setup()).
+  float raw = (rawMillivolts / 1000.0f) * settings.battDividerRatio;
+  // Reported out BEFORE the BATT_CAL curve below touches it -- an honest
+  // "what the hardware measured" figure to compare against a multimeter,
+  // independent of the (usually identity, but not necessarily) piecewise
+  // correction that follows. Optional: existing callers that don't care
+  // pass nullptr and nothing changes for them.
+  if (rawOut) *rawOut = raw;
 
   // Apply the same piecewise-linear correction as the ESPHome calibrate_linear filter
   if (raw <= BATT_CAL[0].raw) {

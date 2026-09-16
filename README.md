@@ -226,6 +226,34 @@ asleep the rest of the time. The value is saved to flash (NVS), so it
 survives power loss and firmware updates, and is reset back to the
 `config.h` default only by a factory reset.
 
+### Battery calibration
+
+Same underlying need as every other battery sensor in this fleet —
+measure your own unit's raw-vs-actual voltage before trusting precise
+battery % — but done from Home Assistant here instead of editing
+`BATT_CAL`/`BATT_DIVIDER_RATIO` in `config.h` and reflashing:
+
+1. Check the **"Battery Voltage (Raw)"** diagnostic sensor in HA — the
+   pre-calibration reading, i.e. exactly what the ADC and voltage divider
+   report before any correction (unlike the main "Battery Voltage"
+   sensor, which reflects whatever calibration is *currently* applied and
+   stops being a useful reference the moment you've calibrated once).
+2. Measure the battery's actual voltage with a multimeter, as close in
+   time to step 1 as you can — voltage can drift slightly between
+   readings, and this device only wakes roughly every
+   `SLEEP_INTERVAL_US`, so there's inherently some lag either way.
+3. Enter that multimeter reading into the **"Battery Calibration"**
+   number entity in HA. On its next wake, the device computes a new
+   correction ratio from the two values (a proportional/divider-style
+   correction, not a full curve refit) and persists it, then resets the
+   entity back to `0` — so it won't reapply the same reading on every
+   future wake, and the entity reading `0` when idle means "nothing
+   pending" rather than a stale leftover value.
+
+Takes effect on the wake after you submit it — same latency as the LED
+brightness and remote-OTA-request entities, since the device is asleep
+the rest of the time.
+
 ## OTA updates
 
 Three independent paths:
@@ -246,12 +274,16 @@ Three independent paths:
 ## Config file
 
 `config.h` holds only hardware pins, firmware identity
-(`DEVICE_MANUFACTURER`/`MODEL`/`HW_VERSION`/`FIRMWARE_VERSION`), battery
-calibration, timing, and the two fleet-wide passwords (`OTA_PASSWORD`,
-`AP_PASSWORD`). Battery calibration (`BATT_CAL`, `BATT_DIVIDER_RATIO`) is
-still genuinely per-board — measure your own unit's raw-vs-actual voltage
-before trusting precise battery %, same as every other battery sensor
-here.
+(`DEVICE_MANUFACTURER`/`MODEL`/`HW_VERSION`/`FIRMWARE_VERSION`), timing,
+and the two fleet-wide passwords (`OTA_PASSWORD`, `AP_PASSWORD`).
+`BATT_DIVIDER_RATIO` here is only the initial default (like
+`LED_BRIGHTNESS_PCT`) — see [Battery calibration](#battery-calibration)
+below for the runtime-adjustable version, which is what this project
+actually uses day to day. `BATT_CAL`, the piecewise raw-to-actual curve
+the rest of this fleet uses for finer correction, is left as identity
+here and not exposed at runtime — the single-ratio calibration below
+covers the actual need (divider-resistor tolerance, which is the normal
+source of per-board error) without needing a whole table-editing UI.
 
 ## Version History
 
@@ -289,3 +321,4 @@ numbering.
 | v4.6.3b | 2026-09-16 | Renamed the setup AP from `TempSensorV4-XXXXXX` (6 hex chars of the chip ID) to `<DEVICE_MANUFACTURER> <DEVICE_MODEL> XXXX` (e.g. `P@cho TH-2 XXXX`, last 4 hex chars of the chip MAC) -- built from the existing config.h identity constants rather than a hardcoded project name, and matches the branding already shown elsewhere in the portal. |
 | v4.7.0b | 2026-09-16 | Added static IP / gateway / subnet / DNS / BSSID pinning -- same idea as `temp_humidity_sensor`'s compile-time equivalent, but runtime-configurable and optional (a "Use static IP" checkbox, unchecked/DHCP by default) via a new "Network settings" section on the Configure page. Subnet defaults to `255.255.255.0`; an invalid IP/gateway/subnet with the checkbox checked falls back to DHCP rather than saving a config that would silently break connectivity. The portal also runs its own WiFi scan (WiFiManager's own picker has no BSSID concept at all) and lists nearby networks' BSSIDs for reference. Applied fresh on every normal-cycle connect attempt in `attemptWifiConnect()`, since `WiFi.config()` only affects the `WiFi.begin()` call right after it. |
 | v4.7.1b | 2026-09-16 | Made the v4.7.0b BSSID reference list clickable -- tap a network to fill in its BSSID field automatically, via inline `onclick` (no `<script>` block; works even in restrictive captive-portal browsers, and if JS genuinely isn't available the field is still a normal text input). Added `htmlEscape()`/`jsAttrEscape()` and ran every scanned SSID through them before it reaches the page -- a nearby network's SSID is attacker-controlled data (any AP in range broadcasts whatever string it wants), so without escaping, a maliciously-named network could inject script into this device's own setup page via that onclick handler. |
+| v4.8.0b | 2026-09-16 | Moved battery voltage calibration to Home Assistant instead of editing `BATT_CAL`/`BATT_DIVIDER_RATIO` in `config.h` and reflashing: a new "Battery Voltage (Raw)" diagnostic sensor shows the pre-calibration reading, and a "Battery Calibration" number entity takes what a multimeter actually reads -- the device computes a new `settings.battDividerRatio` from the two (a proportional correction, persisted in NVS; `readBatteryVoltage()` gained an optional out-param to expose the raw value for this) on its next wake, then resets the entity back to `0`, same one-shot pattern as the remote OTA-request switch. |
