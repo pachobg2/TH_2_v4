@@ -69,8 +69,11 @@
  *     only takes effect for the WiFi.begin() call right after it). The
  *     portal also does its own quick WiFi scan (separate from
  *     WiFiManager's own SSID-only picker, which has no concept of BSSID
- *     at all) and lists each nearby network's BSSID for reference, so you
- *     don't have to go find it in your router's admin page.
+ *     at all) and lists each nearby network's BSSID, clickable to fill in
+ *     the BSSID field automatically -- SSIDs are attacker-controlled data
+ *     (any AP in range broadcasts whatever it wants), so they're run
+ *     through jsAttrEscape()/htmlEscape() before reaching that onclick
+ *     handler or the page at all.
  *
  * Everything else -- sensor read, battery curve, boot/fail counters,
  * last-full-charge tracking, HA discovery, deep sleep -- is unchanged from
@@ -159,6 +162,49 @@ struct SensorReading {
   float humidity;
   bool ok;
 };
+
+// HTML-escapes a string for safe use as element text or (quoted) attribute
+// content. Needed anywhere untrusted data reaches the portal's HTML -- a
+// nearby WiFi network's SSID is exactly that: any AP in range can
+// broadcast whatever string it wants, and it ends up in this page's
+// network-scan list.
+String htmlEscape(const String& in) {
+  String out;
+  out.reserve(in.length());
+  for (size_t i = 0; i < in.length(); i++) {
+    char c = in[i];
+    switch (c) {
+      case '&':  out += "&amp;";  break;
+      case '"':  out += "&quot;"; break;
+      case '\'': out += "&#39;";  break;
+      case '<':  out += "&lt;";   break;
+      case '>':  out += "&gt;";   break;
+      default:   out += c;
+    }
+  }
+  return out;
+}
+
+// For embedding inside a single-quoted JS string that itself sits inside a
+// double-quoted HTML attribute, e.g. onclick="...value='SSID_HERE'". Two
+// escaping passes are needed, JS first then HTML, so the browser's single
+// decode-and-execute pass comes out right: JS-escaping first neutralizes a
+// raw "'" from the SSID into "\'" (a harmless escaped-apostrophe sequence
+// inside the JS string, not a string terminator); running htmlEscape() on
+// that result second protects the surrounding HTML attribute the same way
+// it would for any other embedded string, without touching the backslash
+// that makes the JS escape work. Skipping either pass, or doing them in
+// the other order, reopens the injection this exists to close.
+String jsAttrEscape(const String& in) {
+  String jsEscaped;
+  jsEscaped.reserve(in.length());
+  for (size_t i = 0; i < in.length(); i++) {
+    char c = in[i];
+    if (c == '\\' || c == '\'') jsEscaped += '\\';
+    jsEscaped += c;
+  }
+  return htmlEscape(jsEscaped);
+}
 
 String getShortChipId() {
   uint64_t mac = ESP.getEfuseMac();
@@ -732,6 +778,17 @@ void runMaintenanceMode(bool viaButton) {
   // this is a separate scan of our own. Blocking, adds a few seconds to
   // entering the portal; WiFi.scanDelete() frees the result buffer once
   // we've copied what we need out of it.
+  //
+  // Each entry is clickable (inline onclick, not a <script> block -- about
+  // as compatible as JS gets, works even in the more restrictive captive-
+  // portal browsers some phones use) and fills the BSSID field below by
+  // id. A nearby network's SSID is attacker-controlled data -- any AP in
+  // range can broadcast whatever string it wants -- so it's run through
+  // jsAttrEscape() before going anywhere near that onclick attribute;
+  // skipping that would let a maliciously-named nearby network inject
+  // script into this device's own setup page. If JS genuinely isn't
+  // available, clicking just does nothing -- the field is still a normal
+  // text input either way.
   WiFi.mode(WIFI_STA);
   int scanCount = WiFi.scanNetworks();
   String bssidListHtml = "<div style='font-size:0.85em;max-height:140px;overflow-y:auto;"
@@ -740,8 +797,11 @@ void runMaintenanceMode(bool viaButton) {
     bssidListHtml += "No networks seen during scan.";
   } else {
     for (int i = 0; i < scanCount; i++) {
-      bssidListHtml += WiFi.SSID(i) + " &mdash; " + WiFi.BSSIDstr(i)
-        + " (" + String(WiFi.RSSI(i)) + " dBm)<br>";
+      String bssidStr = WiFi.BSSIDstr(i);
+      bssidListHtml += "<span onclick=\"document.getElementById('bssid').value='"
+        + jsAttrEscape(bssidStr) + "'\" style='cursor:pointer;text-decoration:underline;color:#0a7d3c;'>"
+        + htmlEscape(WiFi.SSID(i)) + " &mdash; " + bssidStr
+        + " (" + String(WiFi.RSSI(i)) + " dBm)</span><br>";
     }
   }
   bssidListHtml += "</div>";
@@ -806,7 +866,8 @@ void runMaintenanceMode(bool viaButton) {
   // `connected` resolves), not before.
   String staticCheckboxAttrs = String("type=\"checkbox\" value=\"1\"") + (settings.useStaticIp ? " checked" : "");
   String bssidSectionHtml = "<p style='margin-bottom:4px;font-size:0.9em;'>Networks seen just now "
-    "(SSID &mdash; BSSID &mdash; signal), for the BSSID field below:</p>" + bssidListHtml;
+    "(SSID &mdash; BSSID &mdash; signal) &mdash; tap one to fill in its BSSID below, "
+    "or type/paste one in manually:</p>" + bssidListHtml;
   WiFiManagerParameter p_net_heading(
     "<hr><p style='margin-bottom:0;'><strong>Network settings (optional)</strong><br>"
     "Leave unchecked for DHCP -- recommended unless you have a specific reason for a static IP.</p>");

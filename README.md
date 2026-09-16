@@ -109,9 +109,12 @@ DHCP"** checkbox on the Configure page, unchecked (plain DHCP) by default:
 - Above the BSSID field is a **list of nearby networks' BSSIDs**, from a
   scan the device runs for you right as the portal opens (adds a few
   seconds to the portal opening — separate from WiFiManager's own network
-  picker above, which only shows SSIDs, no BSSID). Copy the one you want
-  into the field above it rather than needing to dig it out of your
-  router's admin page.
+  picker above, which only shows SSIDs, no BSSID). **Tap a network to
+  fill in its BSSID automatically**, or type/paste one in manually. Each
+  entry's SSID is HTML/JS-escaped before being placed in the page — a
+  nearby network's name is attacker-controlled data (any AP in range can
+  broadcast whatever string it wants), so this prevents a maliciously-
+  named network from injecting script into the device's own setup page.
 
 Applied on every normal-cycle connect attempt, not just once — `WiFi.config()`
 only takes effect for the `WiFi.begin()` call immediately following it, so
@@ -285,3 +288,4 @@ numbering.
 | v4.6.2b | 2026-09-16 | Enlarged the logo (64px to 120px) and hid the landing page's own default header. Confirmed via WiFiManager's source that only `handleRoot()` (the landing page) renders `<h1>{title}</h1><h3>{apName}</h3>` -- the literal text "WiFiManager" (the library's own default title, never changed here) over the AP name "TempSensorV4-XXXXXX" -- and that the "Configure" page builds its header differently, so hiding `h1`/`h3` via CSS is safe and doesn't affect it. |
 | v4.6.3b | 2026-09-16 | Renamed the setup AP from `TempSensorV4-XXXXXX` (6 hex chars of the chip ID) to `<DEVICE_MANUFACTURER> <DEVICE_MODEL> XXXX` (e.g. `P@cho TH-2 XXXX`, last 4 hex chars of the chip MAC) -- built from the existing config.h identity constants rather than a hardcoded project name, and matches the branding already shown elsewhere in the portal. |
 | v4.7.0b | 2026-09-16 | Added static IP / gateway / subnet / DNS / BSSID pinning -- same idea as `temp_humidity_sensor`'s compile-time equivalent, but runtime-configurable and optional (a "Use static IP" checkbox, unchecked/DHCP by default) via a new "Network settings" section on the Configure page. Subnet defaults to `255.255.255.0`; an invalid IP/gateway/subnet with the checkbox checked falls back to DHCP rather than saving a config that would silently break connectivity. The portal also runs its own WiFi scan (WiFiManager's own picker has no BSSID concept at all) and lists nearby networks' BSSIDs for reference. Applied fresh on every normal-cycle connect attempt in `attemptWifiConnect()`, since `WiFi.config()` only affects the `WiFi.begin()` call right after it. |
+| v4.7.1b | 2026-09-16 | Made the v4.7.0b BSSID reference list clickable -- tap a network to fill in its BSSID field automatically, via inline `onclick` (no `<script>` block; works even in restrictive captive-portal browsers, and if JS genuinely isn't available the field is still a normal text input). Added `htmlEscape()`/`jsAttrEscape()` and ran every scanned SSID through them before it reaches the page -- a nearby network's SSID is attacker-controlled data (any AP in range broadcasts whatever string it wants), so without escaping, a maliciously-named network could inject script into this device's own setup page via that onclick handler. |
