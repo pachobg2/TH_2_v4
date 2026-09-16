@@ -19,7 +19,9 @@
  * What's different from temp_humidity_sensor:
  *   - No compiled-in WiFi/MQTT/device-identity secrets. On first-ever boot
  *     (or whenever the setup button is held at boot), the device broadcasts
- *     its own WiFi network ("TempSensorV4-XXXXXX"), scans nearby networks,
+ *     its own WiFi network (e.g. "P@cho TH-2 XXXX" -- DEVICE_MANUFACTURER
+ *     + DEVICE_MODEL + the last 4 hex chars of the chip MAC), scans
+ *     nearby networks,
  *     and serves a small web page (WiFiManager) where you pick your WiFi
  *     and enter your MQTT broker host/port/user/password and a device
  *     name -- no per-device config.h edit or re-flash needed to deploy a
@@ -620,8 +622,9 @@ void connectWiFi() {
 
 // Entered when the setup button is held at boot, or when this device has
 // never been configured yet (settings.configured == false). Broadcasts
-// "TempSensorV4-XXXXXX" immediately (no attempt to reconnect with any
-// existing WiFi credentials first -- see the comment above the
+// "<DEVICE_MANUFACTURER> <DEVICE_MODEL> XXXX" (e.g. "P@cho TH-2 XXXX",
+// last 4 hex chars of the chip MAC) immediately (no attempt to reconnect
+// with any existing WiFi credentials first -- see the comment above the
 // startConfigPortal() call for why), scans for nearby networks, and serves
 // a page (WiFiManager) with a WiFi picker plus custom fields for MQTT and
 // device identity -- one form, one Save, both saved together in the same
@@ -743,8 +746,8 @@ void runMaintenanceMode(bool viaButton) {
   // "Configure" page builds its header differently) renders
   // "<h1>{_title}</h1><h3>{_apName}</h3>", i.e. the literal text
   // "WiFiManager" (the library's own default title, never changed here)
-  // above the AP name "TempSensorV4-XXXXXX" -- redundant now that our own
-  // branded header and logo are there instead.
+  // above the AP name (e.g. "P@cho TH-2 XXXX") -- redundant now that our
+  // own branded header and logo are there instead.
   String versionHeader = "<style>body::before{content:'" + String(DEVICE_MANUFACTURER) + " " + String(DEVICE_MODEL)
                           + " Sensor\\A Firmware v" + String(FIRMWARE_VERSION)
                           + "';white-space:pre-line;display:block;text-align:center;color:#888;margin:4px 0;}"
@@ -821,7 +824,9 @@ void runMaintenanceMode(bool viaButton) {
   // Non-blocking so the LED can blink for the duration of the portal
   // instead of sitting solid -- WiFiManager hands control back to us via
   // process(), rather than blocking inside startConfigPortal() itself.
-  String apName = "TempSensorV4-" + getShortChipId();
+  // Last 4 hex chars of the chip MAC, not all 6 of getShortChipId()'s --
+  // just enough to tell units apart at a glance without a long suffix.
+  String apName = String(DEVICE_MANUFACTURER) + " " + String(DEVICE_MODEL) + " " + getShortChipId().substring(2);
   wm.setConfigPortalBlocking(false);
   wm.startConfigPortal(apName.c_str(), apPassword);
 

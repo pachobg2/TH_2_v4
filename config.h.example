@@ -27,8 +27,8 @@ static const char* OTA_PASSWORD = "changeme-ota";
 // ------------------------------------------------------------------
 // Setup portal
 // ------------------------------------------------------------------
-// Password for this device's own temporary "TempSensorV4-XXXXXX" WiFi
-// network during setup. MUST be 8-63 characters -- that's a hard WPA2
+// Password for this device's own temporary setup WiFi network (e.g.
+// "P@cho TH-2 XXXX"). MUST be 8-63 characters -- that's a hard WPA2
 // requirement, not just this library's preference. Under 8 characters and
 // WiFi.softAP() fails to bring the AP up AT ALL, with no visible error --
 // the network just never appears, which looks identical to a crash. (The

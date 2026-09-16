@@ -48,9 +48,10 @@ for the OTA-only path to use.
 
 1. **First power-on** (or holding the setup button past 10s at boot on an
    already-configured unit): the device broadcasts its own WiFi network,
-   `TempSensorV4-XXXXXX` (last 6 hex digits of its chip ID), protected by
-   `AP_PASSWORD` from `config.h` (default `setup1234`), LED blinking once
-   a second for as long as the portal is open.
+   e.g. `P@cho TH-2 XXXX` (`DEVICE_MANUFACTURER` + `DEVICE_MODEL` + the
+   last 4 hex chars of the chip MAC), protected by `AP_PASSWORD` from
+   `config.h` (default `setup1234`), LED blinking once a second for as
+   long as the portal is open.
 2. Connect to that network from your phone or laptop. A captive-portal
    landing page should open automatically (or browse to `192.168.4.1`),
    showing a small logo, a **"Device status"** box, then a short menu —
@@ -247,3 +248,4 @@ numbering.
 | v4.6.0b | 2026-09-15 | Two portal changes: (1) moved the "Device status" box off the "Configure WiFi" form and onto the landing menu page instead, below the button list -- via `setCustomMenuHTML()` and a `"custom"` menu-position token, the actual supported mechanism for this rather than a `WiFiManagerParameter`. (2) Relabeled the "Configure WiFi" button to just "Configure" (it covers WiFi and MQTT/device settings together, so the old label undersold it) -- WiFiManager has no button-label API, so this hides the button's real text via CSS and injects replacement text with `::after`, targeting it by its parent form's `action='/wifi'` (confirmed against the library's actual generated markup, not guessed). |
 | v4.6.1b | 2026-09-16 | Added a small lime-green "P@cho" circular-badge logo (inline SVG, a few hundred bytes -- no base64 encoding or separate image request needed) to the landing menu page, and moved the "custom" menu-position token to the front of the menu order so the logo and "Device status" box now show up above the button list instead of below it. |
 | v4.6.2b | 2026-09-16 | Enlarged the logo (64px to 120px) and hid the landing page's own default header. Confirmed via WiFiManager's source that only `handleRoot()` (the landing page) renders `<h1>{title}</h1><h3>{apName}</h3>` -- the literal text "WiFiManager" (the library's own default title, never changed here) over the AP name "TempSensorV4-XXXXXX" -- and that the "Configure" page builds its header differently, so hiding `h1`/`h3` via CSS is safe and doesn't affect it. |
+| v4.6.3b | 2026-09-16 | Renamed the setup AP from `TempSensorV4-XXXXXX` (6 hex chars of the chip ID) to `<DEVICE_MANUFACTURER> <DEVICE_MODEL> XXXX` (e.g. `P@cho TH-2 XXXX`, last 4 hex chars of the chip MAC) -- built from the existing config.h identity constants rather than a hardcoded project name, and matches the branding already shown elsewhere in the portal. |
