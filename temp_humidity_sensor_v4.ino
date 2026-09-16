@@ -64,7 +64,8 @@
  *     diagnostics) is hidden; a lime-green "P@cho" logo (inline SVG) plus
  *     a "Device status" section at the top of the landing menu page show
  *     a live temp/humidity/battery reading (taken right as the portal
- *     opens) plus last-known WiFi/MQTT connectivity instead. The landing
+ *     opens) plus last-known WiFi network, IP config (static or DHCP),
+ *     BSSID pin, and MQTT broker. The landing
  *     page's own default header ("WiFiManager" over the AP name) is
  *     hidden too, in favor of the logo and our own branded header. The
  *     "Configure WiFi" button is relabeled to just "Configure" (CSS text
@@ -869,6 +870,15 @@ void runMaintenanceMode(bool viaButton) {
   String wifiStatusStr = settings.configured
     ? (settings.wifiSsid.length() ? ("last connected: " + settings.wifiSsid) : String("no WiFi saved yet"))
     : String("not yet configured");
+  // Independent of settings.configured (unlike wifiStatusStr/mqttStatusStr
+  // above) -- static IP/BSSID can be filled in on a portal visit that
+  // otherwise leaves the device unconfigured (e.g. MQTT host still blank),
+  // and are meaningful to show either way.
+  String staticIpStatusStr = settings.useStaticIp
+    ? (settings.staticIp + " (gateway " + settings.gateway + ", subnet " + settings.subnet
+       + (settings.dns.length() ? (", DNS " + settings.dns) : "") + ")")
+    : String("DHCP");
+  String bssidStatusStr = settings.bssid.length() ? settings.bssid : String("none (any AP)");
   String mqttStatusStr = (settings.configured && settings.mqttHost.length())
     ? (settings.mqttHost + ":" + String(settings.mqttPort))
     : String("not yet configured");
@@ -877,6 +887,8 @@ void runMaintenanceMode(bool viaButton) {
     + "Temperature: " + tempStr + " &middot; Humidity: " + humStr + "<br>"
     + "Battery: " + String(statusBattV, 2) + "V (" + String(statusBattPct, 0) + "%)<br>"
     + "WiFi: " + wifiStatusStr + "<br>"
+    + "IP config: " + staticIpStatusStr + "<br>"
+    + "BSSID pin: " + bssidStatusStr + "<br>"
     + "MQTT broker: " + mqttStatusStr + "<br>"
     + "Boot count: " + String(bootCount) + " &middot; connect fails: " + String(connectFailCount)
     + " today / " + String(totalFailCount) + " total"
