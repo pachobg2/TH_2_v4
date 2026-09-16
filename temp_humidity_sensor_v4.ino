@@ -50,10 +50,12 @@
  *     -- persisted in NVS (settings.ledBrightnessPct), applied on the next
  *     wake after a change, same latency as the remote OTA-request switch.
  *   - The portal's built-in "Info" page (generic ESP32 chip/heap/uptime
- *     diagnostics) is hidden; a small lime-green "P@cho" logo (inline SVG)
- *     plus a "Device status" section at the top of the landing menu page
- *     show a live temp/humidity/battery reading (taken right as the
- *     portal opens) plus last-known WiFi/MQTT connectivity instead. The
+ *     diagnostics) is hidden; a lime-green "P@cho" logo (inline SVG) plus
+ *     a "Device status" section at the top of the landing menu page show
+ *     a live temp/humidity/battery reading (taken right as the portal
+ *     opens) plus last-known WiFi/MQTT connectivity instead. The landing
+ *     page's own default header ("WiFiManager" over the AP name) is
+ *     hidden too, in favor of the logo and our own branded header. The
  *     "Configure WiFi" button is relabeled to just "Configure" (CSS text
  *     swap -- WiFiManager has no button-label
  *     API), since that page covers both WiFi and MQTT/device settings.
@@ -674,7 +676,7 @@ void runMaintenanceMode(bool viaButton) {
   // render together as one "custom" menu-slot block, positioned at the
   // very top of the landing page (see the menu order below) -- branding
   // and status first, then the action buttons.
-  String logoSvg = "<svg width='64' height='64' viewBox='250 30 180 180' xmlns='http://www.w3.org/2000/svg' "
+  String logoSvg = "<svg width='120' height='120' viewBox='250 30 180 180' xmlns='http://www.w3.org/2000/svg' "
     "style='display:block;margin:8px auto;'>"
     "<circle cx='340' cy='120' r='90' fill='#65A30D'/>"
     "<circle cx='340' cy='120' r='90' fill='none' stroke='#A3E635' stroke-width='3'/>"
@@ -735,11 +737,20 @@ void runMaintenanceMode(bool viaButton) {
   // much older, more consistently-available API. versionHeader has to
   // stay alive for as long as wm does (WiFiManager stores the pointer,
   // not a copy), so it's a local here rather than a temporary.
+  //
+  // Also hides the landing page's own default header -- confirmed via
+  // WiFiManager's source that handleRoot() (and only handleRoot(); the
+  // "Configure" page builds its header differently) renders
+  // "<h1>{_title}</h1><h3>{_apName}</h3>", i.e. the literal text
+  // "WiFiManager" (the library's own default title, never changed here)
+  // above the AP name "TempSensorV4-XXXXXX" -- redundant now that our own
+  // branded header and logo are there instead.
   String versionHeader = "<style>body::before{content:'" + String(DEVICE_MANUFACTURER) + " " + String(DEVICE_MODEL)
                           + " Sensor\\A Firmware v" + String(FIRMWARE_VERSION)
                           + "';white-space:pre-line;display:block;text-align:center;color:#888;margin:4px 0;}"
                           + "form[action='/wifi'] button{font-size:0;}"
-                          + "form[action='/wifi'] button::after{content:'Configure';font-size:1rem;}</style>";
+                          + "form[action='/wifi'] button::after{content:'Configure';font-size:1rem;}"
+                          + "h1,h3{display:none;}</style>";
   wm.setCustomHeadElement(versionHeader.c_str());
   wm.addParameter(&p_mqtt_heading);
   wm.addParameter(&p_mqtt_host);

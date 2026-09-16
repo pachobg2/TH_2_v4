@@ -90,9 +90,11 @@ landing menu page has, above the button list (via `setCustomMenuHTML()`
 and a `"custom"` menu-position token — the supported way to add content
 to that page, rather than the "Configure" form itself):
 
-- A small **lime-green "P@cho" logo** — a circular badge, inline SVG (a
-  few hundred bytes as plain text, no separate image request or base64
-  encoding needed).
+- A **lime-green "P@cho" logo** — a circular badge, inline SVG (a few
+  hundred bytes as plain text, no separate image request or base64
+  encoding needed). The landing page's own default header (the library's
+  literal default title, "WiFiManager", over the AP name) is hidden in
+  favor of this and the branded header text at the top of the page.
 - A **"Device status"** box:
   - **Temperature / humidity / battery** — a real reading, taken by
     powering on the SHTC3 right as the portal opens (same sensor, same
@@ -244,3 +246,4 @@ numbering.
 | v4.5.0b | 2026-09-15 | Replaced the portal's built-in "Info" page (generic ESP32 chip/heap/uptime diagnostics -- no public WiFiManager API to customize its content, only to hide its optional buttons) with a "Device status" section on the "Configure WiFi" page: a live temperature/humidity/battery reading taken as the portal opens (extracted the sensor read into a shared `readSensor()` helper, also used by the normal report cycle), plus last-known WiFi network and MQTT broker, plus boot/connect-fail counters. Snapshot only, not a live-updating dashboard. |
 | v4.6.0b | 2026-09-15 | Two portal changes: (1) moved the "Device status" box off the "Configure WiFi" form and onto the landing menu page instead, below the button list -- via `setCustomMenuHTML()` and a `"custom"` menu-position token, the actual supported mechanism for this rather than a `WiFiManagerParameter`. (2) Relabeled the "Configure WiFi" button to just "Configure" (it covers WiFi and MQTT/device settings together, so the old label undersold it) -- WiFiManager has no button-label API, so this hides the button's real text via CSS and injects replacement text with `::after`, targeting it by its parent form's `action='/wifi'` (confirmed against the library's actual generated markup, not guessed). |
 | v4.6.1b | 2026-09-16 | Added a small lime-green "P@cho" circular-badge logo (inline SVG, a few hundred bytes -- no base64 encoding or separate image request needed) to the landing menu page, and moved the "custom" menu-position token to the front of the menu order so the logo and "Device status" box now show up above the button list instead of below it. |
+| v4.6.2b | 2026-09-16 | Enlarged the logo (64px to 120px) and hid the landing page's own default header. Confirmed via WiFiManager's source that only `handleRoot()` (the landing page) renders `<h1>{title}</h1><h3>{apName}</h3>` -- the literal text "WiFiManager" (the library's own default title, never changed here) over the AP name "TempSensorV4-XXXXXX" -- and that the "Configure" page builds its header differently, so hiding `h1`/`h3` via CSS is safe and doesn't affect it. |
