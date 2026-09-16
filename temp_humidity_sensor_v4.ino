@@ -50,11 +50,12 @@
  *     -- persisted in NVS (settings.ledBrightnessPct), applied on the next
  *     wake after a change, same latency as the remote OTA-request switch.
  *   - The portal's built-in "Info" page (generic ESP32 chip/heap/uptime
- *     diagnostics) is hidden; a "Device status" section at the bottom of
- *     the landing menu page shows a live temp/humidity/battery reading
- *     (taken right as the portal opens) plus last-known WiFi/MQTT
- *     connectivity instead. The "Configure WiFi" button is relabeled to
- *     just "Configure" (CSS text swap -- WiFiManager has no button-label
+ *     diagnostics) is hidden; a small lime-green "P@cho" logo (inline SVG)
+ *     plus a "Device status" section at the top of the landing menu page
+ *     show a live temp/humidity/battery reading (taken right as the
+ *     portal opens) plus last-known WiFi/MQTT connectivity instead. The
+ *     "Configure WiFi" button is relabeled to just "Configure" (CSS text
+ *     swap -- WiFiManager has no button-label
  *     API), since that page covers both WiFi and MQTT/device settings.
  *
  * Everything else -- sensor read, battery curve, boot/fail counters,
@@ -665,11 +666,32 @@ void runMaintenanceMode(bool viaButton) {
     + "Boot count: " + String(bootCount) + " &middot; connect fails: " + String(connectFailCount)
     + " today / " + String(totalFailCount) + " total"
     + "</div>";
-  // Rendered on the landing menu page (below the button list), not the
+  // Lime green circular "P@cho" badge -- inline SVG rather than a
+  // base64-encoded raster image, since it's plain text (a few hundred
+  // bytes) and needs no separate HTTP request. Tight viewBox cropped to
+  // just the badge's own bounds (the design canvas it was approved in was
+  // a wider 680x240 preview frame). Prepended to statusHtml below so both
+  // render together as one "custom" menu-slot block, positioned at the
+  // very top of the landing page (see the menu order below) -- branding
+  // and status first, then the action buttons.
+  String logoSvg = "<svg width='64' height='64' viewBox='250 30 180 180' xmlns='http://www.w3.org/2000/svg' "
+    "style='display:block;margin:8px auto;'>"
+    "<circle cx='340' cy='120' r='90' fill='#65A30D'/>"
+    "<circle cx='340' cy='120' r='90' fill='none' stroke='#A3E635' stroke-width='3'/>"
+    "<g transform='translate(340,120) scale(1.15) translate(-323.5,-125.5)'>"
+    "<text x='272' y='160' font-size='102' font-weight='600' font-family='Arial, sans-serif' fill='#FFFFFF'>P</text>"
+    "<text x='300' y='156' font-size='30' font-weight='500' font-family='Arial, sans-serif' fill='#FFFFFF'>@cho</text>"
+    "</g>"
+    "<circle cx='388' cy='64' r='6' fill='#D9F99D'/>"
+    "<circle cx='388' cy='64' r='16' fill='none' stroke='#D9F99D' stroke-width='2.5' opacity='0.8'/>"
+    "<circle cx='388' cy='64' r='27' fill='none' stroke='#D9F99D' stroke-width='2' opacity='0.5'/>"
+    "</svg>";
+  // Rendered on the landing menu page (above the button list), not the
   // "Configure WiFi" form -- via setCustomMenuHTML() + the "custom" menu
-  // token below, rather than as a WiFiManagerParameter. statusHtml has to
+  // token below, rather than as a WiFiManagerParameter. These have to
   // stay alive for as long as wm does, same reasoning as versionHeader
   // further down.
+  String customMenuHtml = logoSvg + statusHtml;
 
   char mqttPortStr[6];
   snprintf(mqttPortStr, sizeof(mqttPortStr), "%u", settings.mqttPort);
@@ -740,17 +762,18 @@ void runMaintenanceMode(bool viaButton) {
   // splitting them after all.
   //
   // The "custom" token renders _customMenuHTML (set below) at this exact
-  // position in the landing menu page -- placed last, so the status box
-  // shows up below the button list, not woven into the WiFi/MQTT form.
+  // position in the landing menu page -- placed first, so the logo and
+  // status box show up above the button list, not woven into the WiFi/MQTT
+  // form.
   //
   // Also hides the built-in "Erase" menu button -- it only clears the
   // radio's own WiFi credentials, not our settings, which reads as a
   // half-working factory reset and could be mistaken for the real one
   // (see the button hold below) -- and the built-in "Info" page, generic
   // ESP32 chip/heap/uptime diagnostics that aren't relevant here.
-  std::vector<const char*> menu = {"wifi", "sep", "restart", "exit", "custom"};
+  std::vector<const char*> menu = {"custom", "wifi", "sep", "restart", "exit"};
   wm.setMenu(menu);
-  wm.setCustomMenuHTML(statusHtml.c_str());
+  wm.setCustomMenuHTML(customMenuHtml.c_str());
   // Already the library default (true) -- set explicitly so it doesn't
   // depend on that default across versions. This only affects whether the
   // firmware answers OS captive-portal probe requests correctly; it can't

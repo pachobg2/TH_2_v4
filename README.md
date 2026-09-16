@@ -53,16 +53,16 @@ for the OTA-only path to use.
    a second for as long as the portal is open.
 2. Connect to that network from your phone or laptop. A captive-portal
    landing page should open automatically (or browse to `192.168.4.1`),
-   showing a short menu — **only one button matters here: "Configure"**.
-   Below the button list on this same landing page is a **"Device
-   status"** box — a live temperature/humidity/battery reading taken right
-   as the portal opened, plus the last-known WiFi network and MQTT broker
-   if this unit's been configured before (see [Device
-   status](#device-status) below). The top of every portal page —
-   including this landing one — shows the device brand and model (e.g.
-   "P@cho TH-2 Sensor") and the firmware version below it, so you can tell
-   which unit and which build you're looking at without checking Serial or
-   Home Assistant.
+   showing a small logo, a **"Device status"** box, then a short menu —
+   **only one button matters here: "Configure"**. The status box is a live
+   temperature/humidity/battery reading taken right as the portal opened,
+   plus the last-known WiFi network and MQTT broker if this unit's been
+   configured before (see [Logo and device
+   status](#logo-and-device-status) below). The top of every portal page —
+   including this landing one — also shows the device brand and model
+   (e.g. "P@cho TH-2 Sensor") and the firmware version below it, so you
+   can tell which unit and which build you're looking at without checking
+   Serial or Home Assistant.
 3. Tap **"Configure"**. This is the *only* page you need: pick your WiFi
    network from the scanned list (or enter one manually), then **keep
    scrolling** — a "MQTT & device settings" heading marks where the same
@@ -82,25 +82,28 @@ To reconfigure a unit later (new WiFi network, different broker), hold the
 setup button past 10s while powering it on — same portal, pre-filled with
 its current settings.
 
-### Device status
+### Logo and device status
 
 The portal's built-in "Info" page (generic ESP32 chip model, free heap,
 uptime — none of it specific to this device) is hidden. In its place, the
-landing menu page has a **"Device status"** box below the button list
-(via `setCustomMenuHTML()` and a `"custom"` menu-position token — the
-supported way to add content to that page, rather than the "Configure"
-form itself):
+landing menu page has, above the button list (via `setCustomMenuHTML()`
+and a `"custom"` menu-position token — the supported way to add content
+to that page, rather than the "Configure" form itself):
 
-- **Temperature / humidity / battery** — a real reading, taken by
-  powering on the SHTC3 right as the portal opens (same sensor, same code
-  path as a normal report cycle). This is a one-time snapshot, not a live
-  dashboard — it won't update again while the page sits open.
-- **WiFi** — the last network this unit successfully connected to, or
-  "not yet configured" / "no WiFi saved yet" if it hasn't got one.
-- **MQTT broker** — the last-saved broker host:port, or "not yet
-  configured" if none is saved.
-- **Boot count / connect fails** — the same diagnostic counters published
-  to HA each cycle (today's count and the lifetime total).
+- A small **lime-green "P@cho" logo** — a circular badge, inline SVG (a
+  few hundred bytes as plain text, no separate image request or base64
+  encoding needed).
+- A **"Device status"** box:
+  - **Temperature / humidity / battery** — a real reading, taken by
+    powering on the SHTC3 right as the portal opens (same sensor, same
+    code path as a normal report cycle). This is a one-time snapshot, not
+    a live dashboard — it won't update again while the page sits open.
+  - **WiFi** — the last network this unit successfully connected to, or
+    "not yet configured" / "no WiFi saved yet" if it hasn't got one.
+  - **MQTT broker** — the last-saved broker host:port, or "not yet
+    configured" if none is saved.
+  - **Boot count / connect fails** — the same diagnostic counters
+    published to HA each cycle (today's count and the lifetime total).
 
 ### Factory reset
 
@@ -240,3 +243,4 @@ numbering.
 | v4.4.4b | 2026-09-14 | Explicitly called `wm.setCaptivePortalEnable(true)` (already the library default, but now not relying on that default across versions) after a report of the captive-portal page not auto-opening on connecting to the AP. Confirmed via WiFiManager's own source that the DNS redirect responsible for that starts immediately in `startConfigPortal()` and is serviced frequently enough by our ~10ms portal loop either way -- the far more likely explanation is OS-side captive-portal-result caching for this exact AP name (same every boot, derived from the chip ID), not a firmware bug. Browsing to `192.168.4.1` manually always works regardless. Also: `FIRMWARE_VERSION` reset to `4.4.4b`, retracting the premature "stable" declaration at v4.4.1b. |
 | v4.5.0b | 2026-09-15 | Replaced the portal's built-in "Info" page (generic ESP32 chip/heap/uptime diagnostics -- no public WiFiManager API to customize its content, only to hide its optional buttons) with a "Device status" section on the "Configure WiFi" page: a live temperature/humidity/battery reading taken as the portal opens (extracted the sensor read into a shared `readSensor()` helper, also used by the normal report cycle), plus last-known WiFi network and MQTT broker, plus boot/connect-fail counters. Snapshot only, not a live-updating dashboard. |
 | v4.6.0b | 2026-09-15 | Two portal changes: (1) moved the "Device status" box off the "Configure WiFi" form and onto the landing menu page instead, below the button list -- via `setCustomMenuHTML()` and a `"custom"` menu-position token, the actual supported mechanism for this rather than a `WiFiManagerParameter`. (2) Relabeled the "Configure WiFi" button to just "Configure" (it covers WiFi and MQTT/device settings together, so the old label undersold it) -- WiFiManager has no button-label API, so this hides the button's real text via CSS and injects replacement text with `::after`, targeting it by its parent form's `action='/wifi'` (confirmed against the library's actual generated markup, not guessed). |
+| v4.6.1b | 2026-09-16 | Added a small lime-green "P@cho" circular-badge logo (inline SVG, a few hundred bytes -- no base64 encoding or separate image request needed) to the landing menu page, and moved the "custom" menu-position token to the front of the menu order so the logo and "Device status" box now show up above the button list instead of below it. |
