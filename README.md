@@ -66,13 +66,16 @@ for the OTA-only path to use.
    Serial or Home Assistant.
 3. Tap **"Configure"**. This is the *only* page you need: pick your WiFi
    network from the scanned list (or enter one manually), then **keep
-   scrolling** — a "MQTT & device settings" heading marks where the same
-   form continues below the WiFi fields: broker host/port/username/
-   password and a device name. Device ID defaults to an auto-generated
-   `th4_XXXXXX` (stable, collision-free out of the box) — override it here
-   if you want a memorable topic name instead. **MQTT broker host is a
-   required field** — the browser won't let you submit the form with it
-   blank, so there's no way to save the WiFi half only by mistake.
+   scrolling** — a "Network settings (optional)" heading marks an optional
+   static IP / BSSID section (see [Network
+   settings](#network-settings-static-ip--bssid) below; leave it alone for
+   plain DHCP), then a "MQTT & device settings" heading marks where the
+   same form continues: broker host/port/username/password and a device
+   name. Device ID defaults to an auto-generated `th4_XXXXXX` (stable,
+   collision-free out of the box) — override it here if you want a
+   memorable topic name instead. **MQTT broker host is a required field**
+   — the browser won't let you submit the form with it blank, so there's
+   no way to save the WiFi half only by mistake.
 4. Save (once, for the whole form). The device connects, stores
    everything to flash, and restarts straight into normal operation. To
    also push new firmware in the same visit, hold the button 2-10s on the
@@ -82,6 +85,38 @@ for the OTA-only path to use.
 To reconfigure a unit later (new WiFi network, different broker), hold the
 setup button past 10s while powering it on — same portal, pre-filled with
 its current settings.
+
+### Network settings (static IP / BSSID)
+
+Same idea as `temp_humidity_sensor`'s compile-time static IP options, but
+runtime-configurable and optional here — a **"Use static IP instead of
+DHCP"** checkbox on the Configure page, unchecked (plain DHCP) by default:
+
+- **Static IP address / Gateway / Subnet mask / DNS server** — only used
+  if the checkbox above them is checked. Subnet mask defaults to
+  `255.255.255.0` if left blank. If the checkbox is checked but the IP,
+  gateway, or subnet don't parse as valid addresses, the save falls back
+  to DHCP instead of saving a config that would silently break
+  connectivity on the next normal cycle — check Serial if a static IP
+  doesn't seem to be taking effect.
+- **WiFi BSSID / MAC** (optional, independent of the static-IP checkbox)
+  — pins the connection to one specific access point by MAC address,
+  instead of whichever AP happens to answer the SSID. Useful for a
+  mesh/repeater setup where more than one AP shares the same network
+  name and you want this unit to always use a specific one (e.g. the
+  closest, or the one on a wired backhaul). Leave blank to connect to
+  whichever AP answers, as normal.
+- Above the BSSID field is a **list of nearby networks' BSSIDs**, from a
+  scan the device runs for you right as the portal opens (adds a few
+  seconds to the portal opening — separate from WiFiManager's own network
+  picker above, which only shows SSIDs, no BSSID). Copy the one you want
+  into the field above it rather than needing to dig it out of your
+  router's admin page.
+
+Applied on every normal-cycle connect attempt, not just once — `WiFi.config()`
+only takes effect for the `WiFi.begin()` call immediately following it, so
+`attemptWifiConnect()` re-applies the static config (if enabled) and BSSID
+(if set) each time it runs.
 
 ### Logo and device status
 
@@ -249,3 +284,4 @@ numbering.
 | v4.6.1b | 2026-09-16 | Added a small lime-green "P@cho" circular-badge logo (inline SVG, a few hundred bytes -- no base64 encoding or separate image request needed) to the landing menu page, and moved the "custom" menu-position token to the front of the menu order so the logo and "Device status" box now show up above the button list instead of below it. |
 | v4.6.2b | 2026-09-16 | Enlarged the logo (64px to 120px) and hid the landing page's own default header. Confirmed via WiFiManager's source that only `handleRoot()` (the landing page) renders `<h1>{title}</h1><h3>{apName}</h3>` -- the literal text "WiFiManager" (the library's own default title, never changed here) over the AP name "TempSensorV4-XXXXXX" -- and that the "Configure" page builds its header differently, so hiding `h1`/`h3` via CSS is safe and doesn't affect it. |
 | v4.6.3b | 2026-09-16 | Renamed the setup AP from `TempSensorV4-XXXXXX` (6 hex chars of the chip ID) to `<DEVICE_MANUFACTURER> <DEVICE_MODEL> XXXX` (e.g. `P@cho TH-2 XXXX`, last 4 hex chars of the chip MAC) -- built from the existing config.h identity constants rather than a hardcoded project name, and matches the branding already shown elsewhere in the portal. |
+| v4.7.0b | 2026-09-16 | Added static IP / gateway / subnet / DNS / BSSID pinning -- same idea as `temp_humidity_sensor`'s compile-time equivalent, but runtime-configurable and optional (a "Use static IP" checkbox, unchecked/DHCP by default) via a new "Network settings" section on the Configure page. Subnet defaults to `255.255.255.0`; an invalid IP/gateway/subnet with the checkbox checked falls back to DHCP rather than saving a config that would silently break connectivity. The portal also runs its own WiFi scan (WiFiManager's own picker has no BSSID concept at all) and lists nearby networks' BSSIDs for reference. Applied fresh on every normal-cycle connect attempt in `attemptWifiConnect()`, since `WiFi.config()` only affects the `WiFi.begin()` call right after it. |

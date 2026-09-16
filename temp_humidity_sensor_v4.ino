@@ -21,11 +21,11 @@
  *     (or whenever the setup button is held at boot), the device broadcasts
  *     its own WiFi network (e.g. "P@cho TH-2 XXXX" -- DEVICE_MANUFACTURER
  *     + DEVICE_MODEL + the last 4 hex chars of the chip MAC), scans
- *     nearby networks,
- *     and serves a small web page (WiFiManager) where you pick your WiFi
- *     and enter your MQTT broker host/port/user/password and a device
- *     name -- no per-device config.h edit or re-flash needed to deploy a
- *     new unit, just power it on and configure it from your phone.
+ *     nearby networks, and serves a small web page (WiFiManager) where you
+ *     pick your WiFi and enter your MQTT broker host/port/user/password
+ *     and a device name -- no per-device config.h edit or re-flash needed
+ *     to deploy a new unit, just power it on and configure it from your
+ *     phone.
  *   - Settings are saved to flash (NVS via Preferences), not compiled in,
  *     so the exact same firmware binary works on every unit.
  *   - The setup button is now hold-duration sensitive: released quickly
@@ -61,6 +61,16 @@
  *     "Configure WiFi" button is relabeled to just "Configure" (CSS text
  *     swap -- WiFiManager has no button-label
  *     API), since that page covers both WiFi and MQTT/device settings.
+ *   - Static IP / gateway / subnet / DNS / BSSID pinning, same idea as
+ *     temp_humidity_sensor's compile-time equivalent but runtime-
+ *     configurable and optional here (a checkbox, DHCP by default) --
+ *     see the "Network settings" section on the portal's Configure page.
+ *     Applied fresh every normal-cycle connect attempt (WiFi.config()
+ *     only takes effect for the WiFi.begin() call right after it). The
+ *     portal also does its own quick WiFi scan (separate from
+ *     WiFiManager's own SSID-only picker, which has no concept of BSSID
+ *     at all) and lists each nearby network's BSSID for reference, so you
+ *     don't have to go find it in your router's admin page.
  *
  * Everything else -- sensor read, battery curve, boot/fail counters,
  * last-full-charge tracking, HA discovery, deep sleep -- is unchanged from
@@ -122,6 +132,20 @@ struct Settings {
   String deviceName; // friendly name shown in Home Assistant
   uint8_t ledBrightnessPct = LED_BRIGHTNESS_PCT; // config.h value is just the initial default; adjustable at runtime from HA
   bool configured = false;
+
+  // Static IP, same idea as temp_humidity_sensor's compile-time equivalent
+  // but runtime-configurable here. useStaticIp gates all of it -- when
+  // false, the other four fields are ignored and the device just uses
+  // DHCP, same as before this existed.
+  bool useStaticIp = false;
+  String staticIp;
+  String gateway;
+  String subnet = "255.255.255.0";
+  String dns;
+  // Optional: pins to one specific access point by MAC instead of
+  // whichever AP answers the SSID, for mesh/repeater setups with more
+  // than one AP sharing the same network name. Empty = no pinning.
+  String bssid;
 };
 
 Settings settings;
@@ -156,6 +180,12 @@ void loadSettings() {
   settings.deviceId     = settingsPrefs.getString("deviceId", "th4_" + chipId);
   settings.deviceName   = settingsPrefs.getString("deviceName", "Temp Sensor " + chipId);
   settings.ledBrightnessPct = settingsPrefs.getUChar("ledBrightPct", LED_BRIGHTNESS_PCT);
+  settings.useStaticIp = settingsPrefs.getBool("useStaticIp", false);
+  settings.staticIp    = settingsPrefs.getString("staticIp", "");
+  settings.gateway     = settingsPrefs.getString("gateway", "");
+  settings.subnet      = settingsPrefs.getString("subnet", "255.255.255.0");
+  settings.dns         = settingsPrefs.getString("dns", "");
+  settings.bssid       = settingsPrefs.getString("bssid", "");
   settingsPrefs.end();
 }
 
@@ -171,6 +201,12 @@ void saveSettings() {
   settingsPrefs.putString("deviceId", settings.deviceId);
   settingsPrefs.putString("deviceName", settings.deviceName);
   settingsPrefs.putUChar("ledBrightPct", settings.ledBrightnessPct);
+  settingsPrefs.putBool("useStaticIp", settings.useStaticIp);
+  settingsPrefs.putString("staticIp", settings.staticIp);
+  settingsPrefs.putString("gateway", settings.gateway);
+  settingsPrefs.putString("subnet", settings.subnet);
+  settingsPrefs.putString("dns", settings.dns);
+  settingsPrefs.putString("bssid", settings.bssid);
   settingsPrefs.end();
 }
 
@@ -359,6 +395,7 @@ ButtonHoldMode readButtonHoldMode() {
 
 ButtonHoldMode readButtonHoldMode();
 const char* buttonHoldModeToString(ButtonHoldMode mode);
+bool parseBssid(const String& str, uint8_t out[6]);
 void connectWiFi();
 bool attemptWifiConnect(uint8_t channel);
 bool connectMQTT();
@@ -569,10 +606,44 @@ void loop() {
 
 // ---------------- WiFi ----------------
 
+// Parses "AA:BB:CC:DD:EE:FF" into 6 raw bytes. Returns false (leaving out[]
+// untouched) on anything that doesn't match -- wrong length, bad hex,
+// missing colons -- so a garbled BSSID field falls back to "no pinning"
+// rather than connecting with a garbage address.
+bool parseBssid(const String& str, uint8_t out[6]) {
+  if (str.length() != 17) return false;
+  int b[6];
+  int matched = sscanf(str.c_str(), "%x:%x:%x:%x:%x:%x", &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]);
+  if (matched != 6) return false;
+  for (int i = 0; i < 6; i++) out[i] = (uint8_t)b[i];
+  return true;
+}
+
 // Single connection attempt on the given channel (0 = let the radio auto-scan/pick).
-// Returns true if connected within WIFI_CONNECT_TIMEOUT_MS.
+// Returns true if connected within WIFI_CONNECT_TIMEOUT_MS. Applies the
+// saved static IP config (if enabled) and BSSID pin (if set) every
+// attempt -- WiFi.config() only takes effect for the WiFi.begin() call
+// that follows it, so it can't just be set once elsewhere.
 bool attemptWifiConnect(uint8_t channel) {
-  WiFi.begin(settings.wifiSsid.c_str(), settings.wifiPassword.c_str(), channel);
+  if (settings.useStaticIp) {
+    IPAddress ip, gw, sn, dnsServer;
+    if (ip.fromString(settings.staticIp) && gw.fromString(settings.gateway) && sn.fromString(settings.subnet)) {
+      if (settings.dns.length() && dnsServer.fromString(settings.dns)) {
+        WiFi.config(ip, gw, sn, dnsServer);
+      } else {
+        WiFi.config(ip, gw, sn);
+      }
+    } else {
+      Serial.println("[debug] Static IP enabled but IP/gateway/subnet fields don't parse -- using DHCP this cycle.");
+    }
+  }
+
+  uint8_t bssidBytes[6];
+  if (settings.bssid.length() && parseBssid(settings.bssid, bssidBytes)) {
+    WiFi.begin(settings.wifiSsid.c_str(), settings.wifiPassword.c_str(), channel, bssidBytes);
+  } else {
+    WiFi.begin(settings.wifiSsid.c_str(), settings.wifiPassword.c_str(), channel);
+  }
 
   unsigned long start = millis();
   wl_status_t lastStatus = WiFi.status();
@@ -654,6 +725,28 @@ void runMaintenanceMode(bool viaButton) {
   digitalWrite(SENSOR_POWER_PIN, LOW); // no further use for it this boot -- unlike the normal cycle, which leaves it on
   float statusBattV = readBatteryVoltage();
   float statusBattPct = batteryPercentage(statusBattV);
+
+  // Scanned once here, before the portal's own AP+STA setup, purely for
+  // the BSSID reference list below the network fields -- WiFiManager's
+  // own network picker has no concept of BSSID at all (SSID only), so
+  // this is a separate scan of our own. Blocking, adds a few seconds to
+  // entering the portal; WiFi.scanDelete() frees the result buffer once
+  // we've copied what we need out of it.
+  WiFi.mode(WIFI_STA);
+  int scanCount = WiFi.scanNetworks();
+  String bssidListHtml = "<div style='font-size:0.85em;max-height:140px;overflow-y:auto;"
+    "background:#f9f9f9;border-radius:6px;padding:6px;margin:4px 0;'>";
+  if (scanCount <= 0) {
+    bssidListHtml += "No networks seen during scan.";
+  } else {
+    for (int i = 0; i < scanCount; i++) {
+      bssidListHtml += WiFi.SSID(i) + " &mdash; " + WiFi.BSSIDstr(i)
+        + " (" + String(WiFi.RSSI(i)) + " dBm)<br>";
+    }
+  }
+  bssidListHtml += "</div>";
+  WiFi.scanDelete();
+
   String tempStr = isnan(statusReading.tempC) ? "sensor error" : String(statusReading.tempC, 1) + " &deg;C";
   String humStr  = isnan(statusReading.humidity) ? "sensor error" : String(statusReading.humidity, 0) + "%";
   String wifiStatusStr = settings.configured
@@ -700,6 +793,30 @@ void runMaintenanceMode(bool viaButton) {
 
   char mqttPortStr[6];
   snprintf(mqttPortStr, sizeof(mqttPortStr), "%u", settings.mqttPort);
+
+  // Network settings (static IP + BSSID pin), same idea as
+  // temp_humidity_sensor's compile-time equivalent but runtime-
+  // configurable and optional -- DHCP by default, and every field below
+  // is ignored unless the checkbox is checked. The checkbox uses the same
+  // empty-default + custom-attribute "value" trick the factory-reset
+  // checkbox eventually needed (see v4.3.0b's Version History entry) to
+  // avoid a duplicate HTML `value` attribute -- unlike that one, though,
+  // this doesn't need the early-loop workaround v4.3.0b also required,
+  // since it's read at the same point as every other field here (after
+  // `connected` resolves), not before.
+  String staticCheckboxAttrs = String("type=\"checkbox\" value=\"1\"") + (settings.useStaticIp ? " checked" : "");
+  String bssidSectionHtml = "<p style='margin-bottom:4px;font-size:0.9em;'>Networks seen just now "
+    "(SSID &mdash; BSSID &mdash; signal), for the BSSID field below:</p>" + bssidListHtml;
+  WiFiManagerParameter p_net_heading(
+    "<hr><p style='margin-bottom:0;'><strong>Network settings (optional)</strong><br>"
+    "Leave unchecked for DHCP -- recommended unless you have a specific reason for a static IP.</p>");
+  WiFiManagerParameter p_use_static_ip("use_static_ip", "Use static IP instead of DHCP", "", 2, staticCheckboxAttrs.c_str());
+  WiFiManagerParameter p_static_ip("static_ip", "Static IP address", settings.staticIp.c_str(), 15);
+  WiFiManagerParameter p_gateway("gateway", "Gateway", settings.gateway.c_str(), 15);
+  WiFiManagerParameter p_subnet("subnet", "Subnet mask", settings.subnet.c_str(), 15);
+  WiFiManagerParameter p_dns("dns", "DNS server (optional)", settings.dns.c_str(), 15);
+  WiFiManagerParameter p_bssid_heading(bssidSectionHtml.c_str());
+  WiFiManagerParameter p_bssid("bssid", "WiFi BSSID / MAC (optional, pins to one access point)", settings.bssid.c_str(), 17);
 
   // Raw-HTML parameter (no id/value, just markup) to visually separate the
   // MQTT/device fields below from the WiFi network picker above them on
@@ -755,6 +872,14 @@ void runMaintenanceMode(bool viaButton) {
                           + "form[action='/wifi'] button::after{content:'Configure';font-size:1rem;}"
                           + "h1,h3{display:none;}</style>";
   wm.setCustomHeadElement(versionHeader.c_str());
+  wm.addParameter(&p_net_heading);
+  wm.addParameter(&p_use_static_ip);
+  wm.addParameter(&p_static_ip);
+  wm.addParameter(&p_gateway);
+  wm.addParameter(&p_subnet);
+  wm.addParameter(&p_dns);
+  wm.addParameter(&p_bssid_heading);
+  wm.addParameter(&p_bssid);
   wm.addParameter(&p_mqtt_heading);
   wm.addParameter(&p_mqtt_host);
   wm.addParameter(&p_mqtt_port);
@@ -900,6 +1025,31 @@ void runMaintenanceMode(bool viaButton) {
   // re-parsing the portal's own internal state.
   settings.wifiSsid     = WiFi.SSID();
   settings.wifiPassword = WiFi.psk();
+
+  // Static IP / BSSID pin. Fields are saved as entered regardless of
+  // validity (so a typo is still there to fix on the next portal visit,
+  // not silently wiped), but useStaticIp only gets set true if IP/
+  // gateway/subnet actually parse -- an invalid address saved as
+  // "enabled" would silently break connectivity on the very next normal
+  // cycle, with no portal open to fix it short of holding the button
+  // again.
+  bool staticRequested = (strcmp(p_use_static_ip.getValue(), "1") == 0);
+  settings.staticIp = p_static_ip.getValue();
+  settings.gateway  = p_gateway.getValue();
+  settings.subnet   = p_subnet.getValue();
+  settings.dns      = p_dns.getValue();
+  settings.bssid    = p_bssid.getValue();
+  if (staticRequested) {
+    IPAddress checkIp, checkGw, checkSn;
+    if (checkIp.fromString(settings.staticIp) && checkGw.fromString(settings.gateway) && checkSn.fromString(settings.subnet)) {
+      settings.useStaticIp = true;
+    } else {
+      Serial.println("Static IP requested but IP/gateway/subnet don't parse as valid addresses -- falling back to DHCP.");
+      settings.useStaticIp = false;
+    }
+  } else {
+    settings.useStaticIp = false;
+  }
 
   // Backstop, not the primary defense -- the mqtt_host field is marked
   // HTML `required` now, so a normal browser won't submit the form with
