@@ -456,6 +456,13 @@ void stopAwakeWatchdog() {
   }
 }
 
+// Declared here (ahead of its "Function declarations" prototype further
+// down, which sits after readButtonHoldMode() below and so doesn't help
+// it) because readButtonHoldMode() calls it directly, and a use has to
+// come after some declaration of the function, not just after its
+// eventual full definition further down the file.
+uint32_t ledDutyForBrightness();
+
 // ---------------- Setup button ----------------
 // Three-way hold detection: released quickly (or not held at all) means a
 // normal cycle; a deliberate 2-10s hold opens an OTA-only window; past 10s
