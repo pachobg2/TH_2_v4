@@ -299,13 +299,13 @@ String TOPIC_TEMP, TOPIC_HUMIDITY, TOPIC_BATTERY_V, TOPIC_BATTERY_PCT, TOPIC_RSS
        TOPIC_OTA_REQUEST, TOPIC_BATTERY_LOW, TOPIC_BOOT_COUNT, TOPIC_FW_VERSION,
        TOPIC_LAST_FULL_CHARGE, TOPIC_LED_BRIGHTNESS, TOPIC_LED_BRIGHTNESS_SET,
        TOPIC_BATTERY_V_RAW, TOPIC_BATTERY_CAL_OFFSET, TOPIC_BATTERY_CAL_OFFSET_SET,
-       TOPIC_IP_ADDRESS, TOPIC_UPTIME_DAYS;
+       TOPIC_IP_ADDRESS, TOPIC_UPTIME_DAYS, TOPIC_OTA_ACTIVE;
 String DISCOVERY_TEMP, DISCOVERY_HUMIDITY, DISCOVERY_BATTERY_V, DISCOVERY_BATTERY_PCT,
        DISCOVERY_RSSI, DISCOVERY_LAST_UPDATE, DISCOVERY_RESET_REASON, DISCOVERY_FAIL_COUNT,
        DISCOVERY_TOTAL_FAIL_COUNT, DISCOVERY_OTA_REQUEST, DISCOVERY_BATTERY_LOW,
        DISCOVERY_BOOT_COUNT, DISCOVERY_FW_VERSION, DISCOVERY_LAST_FULL_CHARGE,
        DISCOVERY_LED_BRIGHTNESS, DISCOVERY_BATTERY_V_RAW, DISCOVERY_BATTERY_CAL_OFFSET,
-       DISCOVERY_IP_ADDRESS, DISCOVERY_UPTIME_DAYS;
+       DISCOVERY_IP_ADDRESS, DISCOVERY_UPTIME_DAYS, DISCOVERY_OTA_ACTIVE;
 
 void buildTopics() {
   String base = String("home/") + settings.deviceId;
@@ -330,6 +330,7 @@ void buildTopics() {
   TOPIC_BATTERY_CAL_OFFSET_SET = base + "/battery_cal_offset/set";
   TOPIC_IP_ADDRESS   = base + "/ip_address";
   TOPIC_UPTIME_DAYS  = base + "/uptime_days";
+  TOPIC_OTA_ACTIVE   = base + "/ota_active";
 
   String sbase = String("homeassistant/sensor/") + settings.deviceId;
   DISCOVERY_TEMP             = sbase + "/temperature/config";
@@ -351,6 +352,7 @@ void buildTopics() {
   DISCOVERY_BATTERY_CAL_OFFSET = String("homeassistant/number/") + settings.deviceId + "/battery_cal_offset/config";
   DISCOVERY_IP_ADDRESS  = sbase + "/ip_address/config";
   DISCOVERY_UPTIME_DAYS = sbase + "/uptime_days/config";
+  DISCOVERY_OTA_ACTIVE  = String("homeassistant/binary_sensor/") + settings.deviceId + "/ota_active/config";
 }
 
 // ---------------- Persisted state (survives deep sleep) ----------------
@@ -584,6 +586,11 @@ void setup() {
   analogSetPinAttenuation((uint8_t)BATT_PIN, ADC_11db);
 
   loadSettings();
+  buildTopics(); // moved up from just before the sensor read below -- the
+                 // button-triggered OTA path needs topics built too, since
+                 // it now publishes "OTA Active" over MQTT (see
+                 // runButtonOtaMode()/enterOtaMode()) without ever reaching
+                 // that later call itself.
 
   // Check this as early as possible, before any slow work (sensor reads,
   // battery averaging). readButtonHoldMode() blocks for as long as the
@@ -629,8 +636,6 @@ void setup() {
     goToSleep();
     return;
   }
-
-  buildTopics();
 
   SensorReading reading = readSensor();
   float tempC = reading.tempC;
@@ -1307,6 +1312,10 @@ void runButtonOtaMode() {
   Serial.println("Setup button held 2-10s -- entering OTA-only mode (no portal).");
   connectWiFi();
   if (WiFi.status() == WL_CONNECTED) {
+    // Best-effort, and only so "OTA Active" (see enterOtaMode()) has
+    // somewhere to publish to -- this path skips the sensor read/publish
+    // cycle entirely, so a failed connect here doesn't block OTA itself.
+    connectMQTT();
     enterOtaMode();
   } else {
     Serial.println("OTA button held but WiFi failed to connect -- going back to sleep.");
@@ -1573,6 +1582,26 @@ void sendDiscoveryConfig() {
     + devBlock + "}";
   publishWithAck(DISCOVERY_BATTERY_LOW.c_str(), battLowPayload.c_str(), true);
 
+  // ON only for the ~OTA_WINDOW_MS the device stays awake listening for a
+  // flash (button-triggered or remote-triggered, both go through
+  // enterOtaMode()), OFF the rest of the time -- same pattern as
+  // door_sensor's own "OTA Active" entity. There's no live equivalent for
+  // the web setup portal (WEB mode): WiFiManager takes the radio over into
+  // its own AP while that's open, so the device isn't reachable via the
+  // home MQTT broker to report it -- see the portal's own on-device status
+  // box for that instead.
+  String otaActivePayload = String("{")
+    + "\"name\":\"" + settings.deviceName + " OTA Active\","
+    + "\"unique_id\":\"" + settings.deviceId + "_ota_active\","
+    + "\"entity_category\":\"diagnostic\","
+    + "\"icon\":\"mdi:upload\","
+    + "\"payload_on\":\"ON\","
+    + "\"payload_off\":\"OFF\","
+    + "\"expire_after\":" + String(EXPIRE_AFTER_SEC) + ","
+    + "\"state_topic\":\"" + TOPIC_OTA_ACTIVE + "\","
+    + devBlock + "}";
+  publishWithAck(DISCOVERY_OTA_ACTIVE.c_str(), otaActivePayload.c_str(), true);
+
   // Last full charge date -- device_class "date" (not "timestamp": we only
   // ever record a calendar day, not a time-of-day). No expire_after: this
   // is a record of a past event, not a live reading, and should stay
@@ -1694,6 +1723,12 @@ int publishState(float tempC, float humidity, float battV, float rawBattV, float
 
   snprintf(buf, sizeof(buf), "%lu", (unsigned long)bootCount);
   if (!publishWithAck(TOPIC_BOOT_COUNT.c_str(), buf, true)) failed++;
+
+  // Defensive: every normal cycle reaching this point is, by definition,
+  // not mid-OTA, so make sure the diagnostic agrees -- covers the case
+  // where a reboot happened mid-window and the "OFF" in enterOtaMode()
+  // never got to run.
+  if (!publishWithAck(TOPIC_OTA_ACTIVE.c_str(), "OFF", true)) failed++;
 
   // NTP resync happens here, last -- after every other reading has already
   // published successfully. This way a slow or failed sync (a real network
@@ -2005,12 +2040,17 @@ bool runOtaWindow() {
 void enterOtaMode() {
   Serial.println("Entering OTA mode, deep sleep prevented...");
   startAwakeWatchdog(OTA_WINDOW_MS + 30000); // OTA legitimately needs to stay awake this long
+  // Best-effort -- if MQTT isn't connected (broker unreachable, or the
+  // button-triggered path below never got one), this just silently fails
+  // and logs to Serial, same as any other publishWithAck() call elsewhere.
+  publishWithAck(TOPIC_OTA_ACTIVE.c_str(), "ON", true);
   ArduinoOTA.setHostname(settings.deviceId.c_str());
   ArduinoOTA.setPassword(OTA_PASSWORD);
   ArduinoOTA.begin();
   ledcWrite(LED_PIN, ledDutyForBrightness()); // solid LED = OTA mode active
   bool canceled = runOtaWindow();
   ledcWrite(LED_PIN, 0);
+  publishWithAck(TOPIC_OTA_ACTIVE.c_str(), "OFF", true);
   // Distinct from the 1-blink "done" flourish elsewhere -- 3 blinks is
   // this firmware's existing "aborted/didn't complete" pattern (see the
   // setup portal's own timeout), so a button press here reads the same

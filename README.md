@@ -243,7 +243,7 @@ on top of that shared topic table.
 
 ### Diagnostics
 
-Two extra diagnostic sensors beyond what `temp_humidity_sensor` has:
+Three extra diagnostic sensors beyond what `temp_humidity_sensor` has:
 
 - **IP Address** — `WiFi.localIP()`, published every cycle alongside
   WiFi Signal.
@@ -254,6 +254,15 @@ Two extra diagnostic sensors beyond what `temp_humidity_sensor` has:
   timer survives across sleep cycles the way a real "how long has this
   been deployed" figure needs to. Not yet available (no state published)
   until the device's first successful NTP sync.
+- **OTA Active** — a binary sensor, `ON` only for the ~5 minute window
+  the device stays awake listening for an OTA flash (button-triggered or
+  remote-triggered via the "OTA Request" switch, both end up here), `OFF`
+  the rest of the time. Same pattern as `door_sensor`'s own "OTA Active"
+  entity. There's no equivalent live diagnostic for the web setup portal
+  (WEB mode): WiFiManager takes the radio over into its own access point
+  while that's open, so the device isn't reachable via the home MQTT
+  broker to report it — the portal's own on-device "Device status" box
+  (see above) is the only live view into that mode.
 
 ### LED brightness
 
@@ -383,3 +392,4 @@ after a full regression pass with no b-suffix history left to walk back.
 | v4.10.0b | 2026-09-17 | A single quick press (not a hold) now cancels early once you're actually inside the button-triggered OTA window or the setup portal, instead of having to wait out the rest of `OTA_WINDOW_MS`/`PORTAL_TIMEOUT_SEC`. `runOtaWindow()` now returns whether it was canceled (3 blinks) vs completed normally (1 blink, unchanged). The setup portal's cancel check needed an extra guard (`sawIdleSinceEntry`) the OTA one didn't: entering setup mode commits instantly without waiting for release, so the button can still be physically down on the portal's first loop iteration -- without the guard, letting go shortly after (which you'd naturally do once you see it's committed) would immediately cancel the very portal that hold just opened. It now only arms cancel-detection after observing the button genuinely idle at least once, so a real, separate press is required. |
 | v4.10.0 | 2026-09-17 | **Declared stable -- `b` suffix dropped.** No code change from v4.10.0b; a full regression pass across factory reset, first-time setup with static IP + BSSID pin, a normal report cycle, button-triggered OTA, and remote OTA all came back clean. |
 | v4.0.0 | 2026-09-17 | **Renumbered to a clean baseline, on request, now that stability is confirmed.** No code change from v4.10.0 -- purely a relabeling. See the note above this table for how this differs from the *other*, premature `4.0.0` earlier in this history (now relabeled v4.4.1b-v4.4.3b). |
+| v4.1.0 | 2026-09-17 | Added an "OTA Active" diagnostic binary sensor, same pattern as `door_sensor`'s own entity -- `ON` only while the device is awake in an OTA window (button-triggered or remote-triggered), `OFF` the rest of the time, with a defensive `OFF` republished every normal cycle in case a reboot happened mid-window. The button-triggered OTA path now also opportunistically connects MQTT (best-effort, doesn't block OTA if it fails) purely so this entity has somewhere to publish to -- it previously skipped MQTT entirely. No live equivalent was added for the web setup portal (WEB mode): WiFiManager takes the radio over into its own AP while that's open, so the device can't reach the home MQTT broker to report it without adding several seconds of connect delay before the portal appears, which wasn't worth the cost for a diagnostic -- the portal's own on-device status box already covers that case. |
