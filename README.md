@@ -334,13 +334,15 @@ source of per-board error) without needing a whole table-editing UI.
 
 ## Version History
 
-**Still in beta.** `FIRMWARE_VERSION` carries a `b` suffix until this
-project is declared stable, and the running firmware genuinely reports
-that suffixed string (over MQTT, in HA, on the portal page) -- it isn't
-just this table's bookkeeping. An earlier attempt to reset it to a clean
-`4.0.0` (see the now-relabeled v4.4.1b-v4.4.3b below) turned out to be
-premature, so versioning continues from v4.4.0b instead of restarting the
-numbering.
+**Declared stable as of v4.10.0.** Everything through v4.10.0b below was
+the beta/development cycle, and the `b` suffix meant `FIRMWARE_VERSION`
+genuinely reported that suffixed string (over MQTT, in HA, on the portal
+page), not just this table's bookkeeping. An earlier attempt to declare
+it stable at a clean `4.0.0` (see the now-relabeled v4.4.1b-v4.4.3b below)
+turned out to be premature -- real bugs kept surfacing on hardware right
+after -- so this time the version simply continues from where the beta
+cycle left off (v4.10.0b -> v4.10.0) rather than resetting the numbering
+again.
 
 | Version | Date | Changes |
 |---|---|---|
@@ -375,3 +377,4 @@ numbering.
 | v4.9.1b | 2026-09-17 | Added live LED feedback while holding the setup button, so releasing at the right moment for OTA is "watch and let go" instead of silently counting seconds: LED stays off, then goes solid right at the 2s (`BUTTON_OTA_HOLD_MS`) mark -- reusing the same "solid = OTA" visual language already used elsewhere in this firmware. Crossing 10s still commits to the setup portal instantly without waiting for release, same as before; the LED is deliberately left solid rather than switched to a pulse at that exact instant, since `runMaintenanceMode()`'s own wait loop takes over moments later (after a sensor read and WiFi scan) and starts pulsing then -- touching it in `readButtonHoldMode()` too would just add an extra solid-off-pulse flicker in between. |
 | v4.9.2b | 2026-09-17 | Fixed a build error from v4.9.1b (`'ledDutyForBrightness' was not declared in this scope`): its own prototype in the "Function declarations" section sits textually after `readButtonHoldMode()`, which now calls it, so that declaration doesn't help -- same class of ordering issue as the `ButtonHoldMode`/`SensorReading` fixes in v4.1.1b/v4.5.0b, just for a function this time rather than a type. Added an earlier forward declaration directly above `readButtonHoldMode()`. No behavior change. |
 | v4.10.0b | 2026-09-17 | A single quick press (not a hold) now cancels early once you're actually inside the button-triggered OTA window or the setup portal, instead of having to wait out the rest of `OTA_WINDOW_MS`/`PORTAL_TIMEOUT_SEC`. `runOtaWindow()` now returns whether it was canceled (3 blinks) vs completed normally (1 blink, unchanged). The setup portal's cancel check needed an extra guard (`sawIdleSinceEntry`) the OTA one didn't: entering setup mode commits instantly without waiting for release, so the button can still be physically down on the portal's first loop iteration -- without the guard, letting go shortly after (which you'd naturally do once you see it's committed) would immediately cancel the very portal that hold just opened. It now only arms cancel-detection after observing the button genuinely idle at least once, so a real, separate press is required. |
+| v4.10.0 | 2026-09-17 | **Declared stable -- `b` suffix dropped.** No code change from v4.10.0b; a full regression pass across factory reset, first-time setup with static IP + BSSID pin, a normal report cycle, button-triggered OTA, and remote OTA all came back clean. See the note above this table for why this reuses the v4.10.0 number instead of resetting to a clean baseline like the (premature) earlier attempt did. |
