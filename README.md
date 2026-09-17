@@ -51,6 +51,16 @@ LED and release when it shows the mode you want:
 regardless of hold duration, since there are no saved WiFi credentials yet
 for the OTA-only path to use.
 
+**Changed your mind?** Once you're actually in the OTA window or the
+setup portal, a single quick press of the same button (not a hold)
+cancels it immediately and goes back to sleep — no need to wait out the
+rest of `OTA_WINDOW_MS` (5 min) or `PORTAL_TIMEOUT_SEC` (10 min). Doesn't
+apply to the moment you're still holding to get in — the portal in
+particular commits the instant you cross 10s without waiting for
+release, so letting go right after (as you naturally would once you see
+it's committed) doesn't cancel it; only a separate press after that
+counts.
+
 ## How setup works
 
 1. **First power-on** (or holding the setup button past 10s at boot on an
@@ -364,3 +374,4 @@ numbering.
 | v4.9.0b | 2026-09-17 | Two changes: (1) Added "IP Address" (published each cycle like WiFi Signal) and "Uptime" (in days) diagnostic sensors to HA. Uptime is based on UTC wall-clock time via a persisted first-boot timestamp (new "device" NVS namespace, `getUptimeDays()`), not a `millis()`/deep-sleep-timer counter -- neither survives across sleep cycles the way a real elapsed-time figure needs. (2) Changed the setup-portal LED from a slow 1s on/off blink to a quick heartbeat pulse -- on for `SETUP_LED_PULSE_MS` (50ms) out of every `SETUP_LED_BLINK_PERIOD_MS` (500ms), replacing the old `SETUP_LED_BLINK_MS` toggle-tracking logic with a stateless `millis() % period < pulse` phase check. |
 | v4.9.1b | 2026-09-17 | Added live LED feedback while holding the setup button, so releasing at the right moment for OTA is "watch and let go" instead of silently counting seconds: LED stays off, then goes solid right at the 2s (`BUTTON_OTA_HOLD_MS`) mark -- reusing the same "solid = OTA" visual language already used elsewhere in this firmware. Crossing 10s still commits to the setup portal instantly without waiting for release, same as before; the LED is deliberately left solid rather than switched to a pulse at that exact instant, since `runMaintenanceMode()`'s own wait loop takes over moments later (after a sensor read and WiFi scan) and starts pulsing then -- touching it in `readButtonHoldMode()` too would just add an extra solid-off-pulse flicker in between. |
 | v4.9.2b | 2026-09-17 | Fixed a build error from v4.9.1b (`'ledDutyForBrightness' was not declared in this scope`): its own prototype in the "Function declarations" section sits textually after `readButtonHoldMode()`, which now calls it, so that declaration doesn't help -- same class of ordering issue as the `ButtonHoldMode`/`SensorReading` fixes in v4.1.1b/v4.5.0b, just for a function this time rather than a type. Added an earlier forward declaration directly above `readButtonHoldMode()`. No behavior change. |
+| v4.10.0b | 2026-09-17 | A single quick press (not a hold) now cancels early once you're actually inside the button-triggered OTA window or the setup portal, instead of having to wait out the rest of `OTA_WINDOW_MS`/`PORTAL_TIMEOUT_SEC`. `runOtaWindow()` now returns whether it was canceled (3 blinks) vs completed normally (1 blink, unchanged). The setup portal's cancel check needed an extra guard (`sawIdleSinceEntry`) the OTA one didn't: entering setup mode commits instantly without waiting for release, so the button can still be physically down on the portal's first loop iteration -- without the guard, letting go shortly after (which you'd naturally do once you see it's committed) would immediately cancel the very portal that hold just opened. It now only arms cancel-detection after observing the button genuinely idle at least once, so a real, separate press is required. |

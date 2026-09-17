@@ -45,7 +45,11 @@
  *     MQTT switch is unchanged from temp_humidity_sensor and doesn't go
  *     through any of this at all. While the portal is open, holding the
  *     button again for FACTORY_RESET_HOLD_MS wipes the device back to a
- *     fully unconfigured state -- no browser interaction needed.
+ *     fully unconfigured state -- no browser interaction needed. A single
+ *     quick press (not a hold) cancels early instead, in either the
+ *     button-triggered OTA window or the setup portal -- exits back to
+ *     the normal sleep cycle immediately rather than waiting out the rest
+ *     of OTA_WINDOW_MS/PORTAL_TIMEOUT_SEC.
  *   - Device ID defaults to an auto-generated, stable "th4_XXXXXX" (from
  *     the chip's own MAC) so units never collide on MQTT topics out of the
  *     box, but you can override it in the portal if you want a memorable
@@ -538,7 +542,7 @@ float readBatteryVoltage(float* rawOut = nullptr);
 float batteryPercentage(float v);
 uint32_t ledDutyForBrightness();
 void blink(int times, uint32_t onMs, uint32_t gapMs);
-void runOtaWindow();
+bool runOtaWindow();
 void enterOtaMode();
 void runButtonOtaMode();
 void runMaintenanceMode(bool viaButton);
@@ -1147,11 +1151,29 @@ void runMaintenanceMode(bool viaButton) {
   // one way or the other before it was ever even looked at. This has
   // neither problem -- no browser interaction needed at all, and it fires
   // the instant the hold crosses the threshold, independent of WiFi.
+  //
+  // A quick press-and-release (well under FACTORY_RESET_HOLD_MS) cancels
+  // the portal instead, falling through to the same "not connected"
+  // cleanup below as a timeout. sawIdleSinceEntry guards against a false
+  // trigger from the tail of the very hold that opened this portal:
+  // entering setup mode commits instantly without waiting for release
+  // (see readButtonHoldMode()), so the button can still be physically
+  // down on the very first iteration here -- without this guard, letting
+  // go shortly after (which you'd naturally do once you see it's
+  // committed) would immediately cancel the portal it just opened. Only
+  // armed once the button's been observed genuinely idle (not mid-press)
+  // at least once, so it takes a real, separate press to cancel.
   unsigned long resetHoldStart = 0; // 0 == button not currently held
+  bool sawIdleSinceEntry = false;
   while (wm.getConfigPortalActive() && WiFi.status() != WL_CONNECTED) {
     wm.process();
 
-    if (digitalRead(SETUP_PIN) == LOW) {
+    bool pressed = (digitalRead(SETUP_PIN) == LOW);
+    if (!pressed && resetHoldStart == 0) {
+      sawIdleSinceEntry = true;
+    }
+
+    if (pressed) {
       if (resetHoldStart == 0) resetHoldStart = millis();
       if (millis() - resetHoldStart >= FACTORY_RESET_HOLD_MS) {
         Serial.println("Setup button held during portal -- factory reset requested.");
@@ -1167,8 +1189,13 @@ void runMaintenanceMode(bool viaButton) {
         delay(200);
         ESP.restart();
       }
-    } else {
+    } else if (resetHoldStart != 0) {
       resetHoldStart = 0;
+      if (sawIdleSinceEntry) {
+        Serial.println("Setup button pressed -- canceling setup portal early.");
+        wm.stopConfigPortal();
+        break;
+      }
     }
 
     // Quick heartbeat pulse (on for SETUP_LED_PULSE_MS out of every
@@ -1951,13 +1978,25 @@ void blink(int times, uint32_t onMs, uint32_t gapMs) {
   }
 }
 
-void runOtaWindow() {
+// Returns true if the button canceled the window early, false if the
+// full OTA_WINDOW_MS elapsed normally. Entry always follows a confirmed
+// release of the button (readButtonHoldMode() only returns once the pin
+// reads released, and the remote-MQTT-triggered path doesn't involve the
+// button at all), so a press here is unambiguously a fresh gesture --
+// unlike the setup portal's own cancel check, this doesn't need to guard
+// against the tail end of the hold that opened it.
+bool runOtaWindow() {
   unsigned long start = millis();
   while (millis() - start < OTA_WINDOW_MS) {
     ArduinoOTA.handle();
+    if (digitalRead(SETUP_PIN) == LOW) {
+      Serial.println("Setup button pressed -- canceling OTA window early.");
+      return true;
+    }
     delay(10);
   }
   Serial.println("OTA window elapsed, resuming normal sleep cycle.");
+  return false;
 }
 
 // Triggered remotely via the "OTA Request" MQTT switch when the device is
@@ -1970,9 +2009,18 @@ void enterOtaMode() {
   ArduinoOTA.setPassword(OTA_PASSWORD);
   ArduinoOTA.begin();
   ledcWrite(LED_PIN, ledDutyForBrightness()); // solid LED = OTA mode active
-  runOtaWindow();
+  bool canceled = runOtaWindow();
   ledcWrite(LED_PIN, 0);
-  blink(1, 50, 50); // brief off/on/off flourish before sleeping
+  // Distinct from the 1-blink "done" flourish elsewhere -- 3 blinks is
+  // this firmware's existing "aborted/didn't complete" pattern (see the
+  // setup portal's own timeout), so a button press here reads the same
+  // way a canceled setup portal does, rather than looking identical to a
+  // normal, uninterrupted OTA window.
+  if (canceled) {
+    blink(3, 20, 200);
+  } else {
+    blink(1, 50, 50); // brief off/on/off flourish before sleeping
+  }
 }
 
 // ---------------- Sleep ----------------
