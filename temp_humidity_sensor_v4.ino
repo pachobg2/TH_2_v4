@@ -32,7 +32,10 @@
  *     (under BUTTON_OTA_HOLD_MS) is just a normal cycle, same as no press
  *     at all. Held 2-10s opens a button-triggered OTA-only window (no
  *     portal, LED solid on) -- same idea as the remote MQTT "OTA Request"
- *     switch, just triggered locally. Held past 10s opens the full setup
+ *     switch, just triggered locally. The LED gives live feedback while
+ *     holding (off, then solid right at the 2s mark) so releasing at the
+ *     right moment is "watch and let go", not counting seconds -- see
+ *     readButtonHoldMode(). Held past 10s opens the full setup
  *     portal (LED pulsing briefly every half second) -- once it succeeds, settings
  *     are saved and it restarts straight into normal operation (hold
  *     2-10s on the next boot too if you also want to push firmware). An
@@ -458,7 +461,9 @@ void stopAwakeWatchdog() {
 // normal cycle; a deliberate 2-10s hold opens an OTA-only window; past 10s
 // opens the full setup portal. See BUTTON_OTA_HOLD_MS/BUTTON_SETUP_HOLD_MS
 // in config.h. (ButtonHoldMode itself is defined up near the includes --
-// see the comment there.)
+// see the comment there.) The LED gives live feedback while holding --
+// off, then solid at the 2s mark -- so releasing at the right moment for
+// OTA is "watch and let go", not counting seconds.
 
 const char* buttonHoldModeToString(ButtonHoldMode mode) {
   switch (mode) {
@@ -468,26 +473,45 @@ const char* buttonHoldModeToString(ButtonHoldMode mode) {
   }
 }
 
-// Measures how long the setup button is held at boot. If this boot was
-// itself woken by the button (deep-sleep GPIO wake), it may already have
-// been held for a moment before we get here -- that's fine, we just start
-// the clock now rather than trying to account for that. Commits to
-// BUTTON_HOLD_SETUP the instant the hold crosses BUTTON_SETUP_HOLD_MS,
-// without waiting for release, so a long hold feels immediate rather than
-// requiring you to guess when to let go.
+// Measures how long the setup button is held at boot, with live LED
+// feedback so releasing at the right moment is "watch and let go" instead
+// of silently counting seconds: LED stays off below BUTTON_OTA_HOLD_MS,
+// then goes solid right at BUTTON_OTA_HOLD_MS -- meaning "release now for
+// OTA", reusing the same visual language solid-on already has everywhere
+// else in this firmware (OTA active). Commits to BUTTON_HOLD_SETUP the
+// instant the hold crosses BUTTON_SETUP_HOLD_MS, without waiting for
+// release, so a long hold feels immediate rather than requiring you to
+// guess when to let go -- deliberately left solid rather than switched to
+// a pulse right here, since runMaintenanceMode()'s own wait loop takes
+// over the LED moments later anyway (after a sensor read and a WiFi scan
+// first) and starts pulsing then; touching it here first would just be an
+// extra solid-to-off-to-pulse flicker in between. If this boot was itself
+// woken by the button (deep-sleep GPIO wake), it may already have been
+// held for a moment before we get here -- that's fine, we just start the
+// clock now rather than trying to account for that.
 ButtonHoldMode readButtonHoldMode() {
   if (digitalRead(SETUP_PIN) != LOW) return BUTTON_HOLD_NONE;
 
   unsigned long start = millis();
+  bool ledOn = false;
   while (digitalRead(SETUP_PIN) == LOW) {
-    if (millis() - start >= BUTTON_SETUP_HOLD_MS) {
+    unsigned long heldMs = millis() - start;
+    if (heldMs >= BUTTON_SETUP_HOLD_MS) {
       return BUTTON_HOLD_SETUP;
+    }
+    bool shouldBeOn = heldMs >= BUTTON_OTA_HOLD_MS;
+    if (shouldBeOn != ledOn) {
+      ledOn = shouldBeOn;
+      ledcWrite(LED_PIN, ledOn ? ledDutyForBrightness() : 0);
     }
     delay(20);
   }
 
   unsigned long heldMs = millis() - start;
-  return (heldMs >= BUTTON_OTA_HOLD_MS) ? BUTTON_HOLD_OTA : BUTTON_HOLD_NONE;
+  if (heldMs < BUTTON_OTA_HOLD_MS) {
+    return BUTTON_HOLD_NONE; // released before the LED ever turned on
+  }
+  return BUTTON_HOLD_OTA; // LED already solid on here -- enterOtaMode() just keeps it that way
 }
 
 // ---------------- Function declarations ----------------

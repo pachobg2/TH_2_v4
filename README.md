@@ -29,17 +29,23 @@ it against whatever version Library Manager actually installs for you.
 
 ## Setup button behavior
 
-The button on `SETUP_PIN` is hold-duration sensitive:
+The button on `SETUP_PIN` is hold-duration sensitive, with **live LED
+feedback while you hold it** — no need to count seconds, just watch the
+LED and release when it shows the mode you want:
 
-- **Released quickly** (under `BUTTON_OTA_HOLD_MS`, 2s): not a deliberate
-  hold, treated as no press at all — normal report cycle.
-- **Held 2-10s**: opens a local OTA-only window (LED solid on) using the
-  already-saved WiFi credentials — no portal, just a chance to push new
-  firmware without walking over to a laptop. Same idea as the remote
-  MQTT "OTA Request" switch, just triggered by the button instead.
-- **Held past 10s**: opens the full setup portal (LED pulsing briefly
-  every half second, `SETUP_LED_BLINK_PERIOD_MS`/`SETUP_LED_PULSE_MS`) —
-  see below.
+- **0-2s**: LED off. Releasing here is not a deliberate hold, treated as
+  no press at all — normal report cycle.
+- **Held 2-10s**: LED goes **solid on** right at the 2s mark — release
+  now for a local OTA-only window using the already-saved WiFi
+  credentials, no portal, just a chance to push new firmware without
+  walking over to a laptop. Same idea as the remote MQTT "OTA Request"
+  switch, just triggered by the button instead. (Solid on is the same
+  visual language OTA mode uses everywhere else in this firmware.)
+- **Held past 10s**: commits instantly to opening the full setup portal,
+  without waiting for release — the LED switches from solid to pulsing
+  briefly every half second (`SETUP_LED_BLINK_PERIOD_MS`/
+  `SETUP_LED_PULSE_MS`) once the portal actually opens (a few seconds
+  later — see below).
 
 **First power-on** always goes straight to the full setup portal
 regardless of hold duration, since there are no saved WiFi credentials yet
@@ -356,3 +362,4 @@ numbering.
 | v4.8.1b | 2026-09-17 | Fixed two real bugs reported from hardware: (1) the v4.7.0b static-IP checkbox never actually worked -- same root cause as the factory-reset checkbox saga (v4.2.0b-v4.2.4b): `WiFiManagerParameter`'s template always emits its own `value='{defaultValue}'`, so a custom `value=` attribute collides with it regardless of whether the default is empty, producing a duplicate HTML attribute. There's no way to build a working checkbox through this API at all -- removed it entirely; static IP is now chosen by filling in the "Static IP address" field itself (blank = DHCP), no separate checkbox. (2) The v4.8.0b battery calibration entity computed a multiplicative ratio from an absolute multimeter reading, which read as nonsense for a value like entering `0.15` (battery voltage became ~0.15V instead of being corrected by 0.15V). Replaced with a plain additive offset (`settings.battVoltageOffsetV`, volts, persistent like LED brightness rather than one-shot) -- entering `0.15` now means "add 0.15V", matching what was actually expected. |
 | v4.8.2b | 2026-09-17 | Added the saved WiFi network, IP config (static IP/gateway/subnet/DNS or "DHCP"), and BSSID pin to the landing page's "Device status" box, alongside the existing temp/humidity/battery/MQTT fields -- all read from `settings`, not gated on `settings.configured` the way the WiFi/MQTT lines above them are, since static IP/BSSID can be filled in on a portal visit that otherwise leaves the device unconfigured (MQTT host still blank) and are meaningful to show either way. |
 | v4.9.0b | 2026-09-17 | Two changes: (1) Added "IP Address" (published each cycle like WiFi Signal) and "Uptime" (in days) diagnostic sensors to HA. Uptime is based on UTC wall-clock time via a persisted first-boot timestamp (new "device" NVS namespace, `getUptimeDays()`), not a `millis()`/deep-sleep-timer counter -- neither survives across sleep cycles the way a real elapsed-time figure needs. (2) Changed the setup-portal LED from a slow 1s on/off blink to a quick heartbeat pulse -- on for `SETUP_LED_PULSE_MS` (50ms) out of every `SETUP_LED_BLINK_PERIOD_MS` (500ms), replacing the old `SETUP_LED_BLINK_MS` toggle-tracking logic with a stateless `millis() % period < pulse` phase check. |
+| v4.9.1b | 2026-09-17 | Added live LED feedback while holding the setup button, so releasing at the right moment for OTA is "watch and let go" instead of silently counting seconds: LED stays off, then goes solid right at the 2s (`BUTTON_OTA_HOLD_MS`) mark -- reusing the same "solid = OTA" visual language already used elsewhere in this firmware. Crossing 10s still commits to the setup portal instantly without waiting for release, same as before; the LED is deliberately left solid rather than switched to a pulse at that exact instant, since `runMaintenanceMode()`'s own wait loop takes over moments later (after a sensor read and WiFi scan) and starts pulsing then -- touching it in `readButtonHoldMode()` too would just add an extra solid-off-pulse flicker in between. |
