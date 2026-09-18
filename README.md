@@ -1,4 +1,14 @@
-# temp_humidity_sensor_v4 — self-provisioning ESP32-C3 SHTC3 sensor
+# TH_2_v4 — self-provisioning ESP32-C3 SHTC3 sensor
+
+*Renamed from `temp_humidity_sensor_v4` on 2026-09-18 (repo included, GitHub
+redirects the old URL) -- see the note above the Version History table.
+This project is locked in lockstep with [`TH_2_v4_L`](../TH_2_v4_L)
+("TH-2 Lite", for HW 1.2 boards with no setup button): firmware changes to
+either get mirrored to the other, and versions move together
+(`TH_2_v4_L` always carries a trailing `l`) -- except the physical
+setup/OTA/factory-reset mechanism itself, which is a deliberate, permanent
+difference between the two (button-hold here, MQTT switches there). See
+this fleet's root `CLAUDE.md`.*
 
 A fork of [`temp_humidity_sensor`](../temp_humidity_sensor) with one core
 difference: **no per-device `config.h` secrets**. WiFi, MQTT, and device
@@ -20,7 +30,7 @@ it against whatever version Library Manager actually installs for you.
 
 ## Files
 
-- `temp_humidity_sensor_v4.ino` — the sketch.
+- `TH_2_v4.ino` — the sketch.
 - `config.h.example` — copy to `config.h`. Unlike the rest of this fleet,
   this file has no per-device secrets in it (no WiFi/MQTT/device fields) —
   just hardware pins, firmware identity, and two fleet-wide values
@@ -393,3 +403,4 @@ after a full regression pass with no b-suffix history left to walk back.
 | v4.10.0 | 2026-09-17 | **Declared stable -- `b` suffix dropped.** No code change from v4.10.0b; a full regression pass across factory reset, first-time setup with static IP + BSSID pin, a normal report cycle, button-triggered OTA, and remote OTA all came back clean. |
 | v4.0.0 | 2026-09-17 | **Renumbered to a clean baseline, on request, now that stability is confirmed.** No code change from v4.10.0 -- purely a relabeling. See the note above this table for how this differs from the *other*, premature `4.0.0` earlier in this history (now relabeled v4.4.1b-v4.4.3b). |
 | v4.1.0 | 2026-09-17 | Added an "OTA Active" diagnostic binary sensor, same pattern as `door_sensor`'s own entity -- `ON` only while the device is awake in an OTA window (button-triggered or remote-triggered), `OFF` the rest of the time, with a defensive `OFF` republished every normal cycle in case a reboot happened mid-window. The button-triggered OTA path now also opportunistically connects MQTT (best-effort, doesn't block OTA if it fails) purely so this entity has somewhere to publish to -- it previously skipped MQTT entirely. No live equivalent was added for the web setup portal (WEB mode): WiFiManager takes the radio over into its own AP while that's open, so the device can't reach the home MQTT broker to report it without adding several seconds of connect delay before the portal appears, which wasn't worth the cost for a diagnostic -- the portal's own on-device status box already covers that case. |
+| v4.1.0 | 2026-09-18 | **Renamed from `temp_humidity_sensor_v4` to `TH_2_v4`** (folder, sketch filename, and GitHub repo -- GitHub redirects the old URL). No code change; version number unchanged since nothing about the firmware itself moved. Done alongside creating [`TH_2_v4_L`](../TH_2_v4_L) ("TH-2 Lite", for HW 1.2 -- no setup button, OTA/setup/factory-reset become MQTT switches instead), which this project is now locked in lockstep with -- see the note above this table and this fleet's root `CLAUDE.md`. |
