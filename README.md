@@ -257,13 +257,14 @@ Three extra diagnostic sensors beyond what `temp_humidity_sensor` has:
 
 - **IP Address** — `WiFi.localIP()`, published every cycle alongside
   WiFi Signal.
-- **Uptime** — in days, since this device's first-ever boot (or since
-  the last factory reset, which wipes the tracked timestamp along with
-  everything else). Based on UTC wall-clock time (persisted in NVS),
-  not a `millis()`-style counter — neither that nor the RTC deep-sleep
-  timer survives across sleep cycles the way a real "how long has this
-  been deployed" figure needs to. Not yet available (no state published)
-  until the device's first successful NTP sync.
+- **Uptime** — in seconds (`device_class: duration`; HA can display it as
+  days/hours), time since the last real reset or power loss. A deep-sleep
+  timer or button wake counts as a continuation, since the device never
+  actually lost power; power-on, manual reset, brownout, watchdog, software
+  restart, or a dead-and-replaced battery all zero it. Uses the RTC counter
+  (`esp_clk_rtc_time()`), which keeps counting through deep sleep, so it
+  needs no NTP sync. (Before v4.1.2 this was a "days since first-ever boot"
+  figure that survived resets; the old entity is retired automatically.)
 - **OTA Active** — a binary sensor, `ON` only for the ~5 minute window
   the device stays awake listening for an OTA flash (button-triggered or
   remote-triggered via the "OTA Request" switch, both end up here), `OFF`
@@ -405,3 +406,4 @@ after a full regression pass with no b-suffix history left to walk back.
 | v4.1.0 | 2026-09-17 | Added an "OTA Active" diagnostic binary sensor, same pattern as `door_sensor`'s own entity -- `ON` only while the device is awake in an OTA window (button-triggered or remote-triggered), `OFF` the rest of the time, with a defensive `OFF` republished every normal cycle in case a reboot happened mid-window. The button-triggered OTA path now also opportunistically connects MQTT (best-effort, doesn't block OTA if it fails) purely so this entity has somewhere to publish to -- it previously skipped MQTT entirely. No live equivalent was added for the web setup portal (WEB mode): WiFiManager takes the radio over into its own AP while that's open, so the device can't reach the home MQTT broker to report it without adding several seconds of connect delay before the portal appears, which wasn't worth the cost for a diagnostic -- the portal's own on-device status box already covers that case. |
 | v4.1.0 | 2026-09-18 | **Renamed from `temp_humidity_sensor_v4` to `TH_2_v4`** (folder, sketch filename, and GitHub repo -- GitHub redirects the old URL). No code change; version number unchanged since nothing about the firmware itself moved. Done alongside creating [`TH_2_v4_L`](../TH_2_v4_L) ("TH-2 Lite", for HW 1.2 -- no setup button, OTA/setup/factory-reset become MQTT switches instead), which this project is now locked in lockstep with -- see the note above this table and this fleet's root `CLAUDE.md`. |
 | v4.1.1 | 2026-09-20 | Fixed the last-full-charge diagnostic re-triggering spuriously: a battery reading hovering right at the top of its curve (ADC noise) could bounce 99%→100%→99%→100% and record a "new" full charge on every single upward bounce. Replaced the plain `wasAt100` rising-edge flag in `updateAndGetLastFullChargeDate()` with an "armed" flag that only re-arms once the battery actually reads at or below the new `FULL_CHARGE_REARM_THRESHOLD_PCT` (default 97%, `config.h`). Applied fleet-wide to every project sharing this diagnostic (`door_sensor`, `DS_1_v3`, `TH_2_v4_L`, `temp_humidity_sensor`, `temp_humidity_sensor_zdravkovec`). |
+| v4.1.2 | 2026-09-25 | Uptime is now true uptime: seconds since the last real reset or power loss (deep-sleep wakes continue the count; power-on/manual reset/brownout/watchdog/software restart/dead-and-replaced battery zero it), via the RTC counter -- replacing the old "days since first-ever boot" figure (NVS timestamp, never zeroed on reset, needed NTP). New `device_class: duration` entity at `home/<id>/uptime`; the old `uptime_days` discovery config is cleared automatically. Any real (non-deep-sleep) reset now also re-sends the HA discovery configs once, so new/changed entities appear after a flash without a power cycle. |
